@@ -13,10 +13,10 @@
 # System Settings. The `cua_status` tool reports what is missing and names the
 # application to enable.
 #
-# Update the two absolute paths below if this package is moved. They are
-# absolute on purpose: a packaged harness resolves bare package names against
-# its own installation, which cannot see a profile's node_modules, and an
-# absolute path is the one form that reaches a package living outside it.
+# Update the absolute path below if this package is moved. It is absolute on
+# purpose: a packaged harness resolves bare package names against its own
+# installation, which cannot see a profile's node_modules, and an absolute path
+# is the one form that reaches a package living outside it.
 - insert:
     # The engine also speaks the Model Context Protocol on stdio, so the
     # harness's own MCP client exposes its catalog. Tools appear to a model as
@@ -34,18 +34,3 @@
         failOnStartupError: false
         reconnect:
           enabled: true
-
-    # The same engine as a native plugin row, which registers `cua_*` tools
-    # directly. Both rows are carried because they exercise different loader
-    # paths; a composition that can only reach one of them still gets the tools.
-    - id: cua
-      name: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/index.js
-      config:
-        enginePath: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
-        # `always` asks through ctx.approval before every write; `session` asks
-        # once per write tool per session; `never` leaves the macOS grants as the
-        # only gate. In a session whose approval policy is `never`, a refused
-        # approval blocks the write outright, so `never` is the only usable
-        # setting there.
-        writeApproval: never
-        idleShutdownMs: 600000
