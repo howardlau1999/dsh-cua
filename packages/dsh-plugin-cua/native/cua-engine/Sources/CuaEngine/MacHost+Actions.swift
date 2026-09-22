@@ -474,7 +474,7 @@ extension MacHost {
             )
         }
 
-        var request = Capture.Request(
+        let request = Capture.Request(
             window: nil,
             display: nil,
             region: .zero,
@@ -573,7 +573,18 @@ extension MacHost {
 
         let result = try await Capture.run(request)
         var members = result.objectValue ?? [:]
-        members["app"] = NSWorkspace.shared.frontmostApplication?.localizedName.jsonField
+        // The application that owns the captured window, not whichever
+        // application happens to be frontmost when the capture finishes. The
+        // caller asked to see a specific window; reporting the frontmost
+        // application made the answer describe a different application whenever
+        // focus moved mid-capture, which a perceive/act loop does constantly. A
+        // display or region capture has no owning application, so the frontmost
+        // one is the honest answer there.
+        if let owner = request.window?.owningApplication {
+            members["app"] = .string(owner.applicationName)
+        } else {
+            members["app"] = NSWorkspace.shared.frontmostApplication?.localizedName.jsonField
+        }
         members["windowId"] = request.window.map { Int($0.windowID) }.jsonField
         // Which screen the capture came from, on-screen: on a multi-display setup
         // the caller needs to know where the pixels they are looking at live.

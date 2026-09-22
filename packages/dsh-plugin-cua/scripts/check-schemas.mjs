@@ -53,7 +53,8 @@ function check(condition, label, detail = '') {
 
 /** A representative valid invocation per tool, used to prove the schema accepts real calls. */
 const SAMPLES = {
-  cua_status: [{ request: false }],
+  cua_status: [{}],
+  cua_request_permissions: [{}],
   cua_displays: [{}],
   cua_apps: [{ query: 'Finder', running: true }],
   cua_windows: [{ app: 'Finder', includeUntitled: true }],

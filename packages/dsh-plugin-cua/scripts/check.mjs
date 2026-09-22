@@ -8,7 +8,13 @@
  * 1. `tsc --noEmit` — the plugin's own types.
  * 2. `check-schemas` — every tool's parameter and output schema, validated with
  *    the harness's own validator.
- * 3. `smoke` — the built bundle loaded and every tool invoked against the real
+ * 3. `check-mcp-catalog` — the catalog the engine publishes over MCP, validated
+ *    the same way, and compared against the TypeScript one so the two
+ *    integration paths cannot drift.
+ * 4. `capture deadline` — a wedged screen capture aborts the engine instead of
+ *    hanging it forever, which is the one failure that takes the machine's
+ *    whole capture path down with it.
+ * 5. `smoke` — the built bundle loaded and every tool invoked against the real
  *    macOS engine.
  *
  * @module
@@ -23,6 +29,8 @@ const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const STAGES = [
   ['types', process.execPath, [join(packageRoot, 'scripts', 'typecheck.mjs')]],
   ['tool schemas', process.execPath, [join(packageRoot, 'scripts', 'check-schemas.mjs')]],
+  ['engine MCP catalog', process.execPath, [join(packageRoot, 'scripts', 'check-mcp-catalog.mjs')]],
+  ['capture deadline', process.execPath, [join(packageRoot, 'scripts', 'check-capture-deadline.mjs')]],
   ['end-to-end smoke', process.execPath, [join(packageRoot, 'scripts', 'smoke.mjs')]],
 ]
 

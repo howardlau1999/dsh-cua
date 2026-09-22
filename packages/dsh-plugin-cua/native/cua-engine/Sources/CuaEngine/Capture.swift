@@ -11,7 +11,11 @@ import CoreGraphics
 /// 4x the pixels the model needs and every extra pixel costs tokens.
 enum Capture {
     /// One resolved capture request.
-    struct Request {
+    ///
+    /// A reference type because the resolution path hands it to an escaping
+    /// task when the deadline races the capture, and `capturedRegion` has to
+    /// reach the caller from inside that task.
+    final class Request {
         /// A window to capture, when the call named one.
         var window: SCWindow?
         /// A display to capture, when the call named one.
@@ -32,6 +36,28 @@ enum Capture {
         /// the request instead would make `region` describe pixels that are not
         /// in the image.
         var capturedRegion: CGRect = .zero
+
+        /// A class has no memberwise initializer, so the one the callers used is
+        /// written out here.
+        init(
+            window: SCWindow? = nil,
+            display: SCDisplay? = nil,
+            region: CGRect,
+            maxWidth: Int,
+            maxHeight: Int,
+            quality: Double,
+            format: String,
+            showsCursor: Bool
+        ) {
+            self.window = window
+            self.display = display
+            self.region = region
+            self.maxWidth = maxWidth
+            self.maxHeight = maxHeight
+            self.quality = quality
+            self.format = format
+            self.showsCursor = showsCursor
+        }
     }
 
     /// Capture one image and encode it.
@@ -42,14 +68,13 @@ enum Capture {
     ///   image the caller receives — on a mixed-density setup that is the only
     ///   number that is true for this particular capture.
     static func run(_ request: Request) async throws -> JSONValue {
-        var mutable = request
-        let native = try await captureImage(&mutable)
-        let image = try downscaleIfNeeded(native, request: mutable)
-        let encoded = try encode(image, format: mutable.format, quality: mutable.quality)
+        let native = try await captureImage(request)
+        let image = try downscaleIfNeeded(native, request: request)
+        let encoded = try encode(image, format: request.format, quality: request.quality)
 
         // The clipped region, not the request: `region` must describe the image
         // the caller receives.
-        let captured = mutable.capturedRegion.isEmpty ? request.region : mutable.capturedRegion
+        let captured = request.capturedRegion.isEmpty ? request.region : request.capturedRegion
         let pointWidth = max(captured.width, 1)
         let pointHeight = max(captured.height, 1)
         return jsonObject([
@@ -79,24 +104,92 @@ enum Capture {
     /// stream due to audio/video capture failure") when captures arrive in quick
     /// succession, which a perceive/act/perceive loop hits routinely. The failure
     /// is transient, so a bounded retry runs before it becomes a tool failure.
-    private static func captureImage(_ request: inout Request) async throws -> CGImage {
+    ///
+    /// The whole retry sequence is bounded by {@link deadline}, because the
+    /// failure is not always an error: when ScreenCaptureKit wedges, the call
+    /// **never returns and never throws**. Measured on macOS 26.6.2, one wedged
+    /// capture blocked every subsequent capture in every process on the machine
+    /// — the host's long-lived engine and a freshly spawned one alike — until
+    /// the wedged process was killed. Without a deadline the engine spins
+    /// against ReplayKit's daemon indefinitely at ~19% CPU and takes the
+    /// machine's capture path down with it.
+    private static func captureImage(_ request: Request) async throws -> CGImage {
         if sessionLocked { throw lockedError() }
-        var lastError: Error?
-        for attempt in 1...3 {
-            do {
-                return try await captureOnce(&request)
-            } catch {
-                lastError = error
-                let nsError = error as NSError
-                let transient = nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
-                // A lock that happened mid-flight is not worth retrying.
-                guard transient, attempt < 3, !sessionLocked else {
-                    throw sessionLocked ? lockedError() : error
-                }
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 250_000_000)
+        return try await withDeadline(deadline) {
+            // A stand-in for a wedged ScreenCaptureKit call, which cannot be
+            // provoked on demand: it never returns, exactly as the real one does
+            // not. Set only from the command line by the deadline check in
+            // `scripts/check-capture-deadline.mjs`, never by a tool call.
+            if ProcessInfo.processInfo.environment["CUA_ENGINE_SIMULATE_WEDGED_CAPTURE"] != nil {
+                while true { try await Task.sleep(nanoseconds: 60_000_000_000) }
             }
+            var lastError: Error?
+            for attempt in 1...3 {
+                do {
+                    return try await self.captureOnce(request)
+                } catch {
+                    lastError = error
+                    let nsError = error as NSError
+                    let transient = nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
+                    // A lock that happened mid-flight is not worth retrying.
+                    guard transient, attempt < 3, !self.sessionLocked else {
+                        throw self.sessionLocked ? Self.lockedError() : error
+                    }
+                    try? await Task.sleep(nanoseconds: UInt64(attempt) * 250_000_000)
+                }
+            }
+            throw lastError ?? CuaError.operationFailed("screen capture failed")
         }
-        throw lastError ?? CuaError.operationFailed("screen capture failed")
+    }
+
+    /// How long the whole capture sequence may take before the engine aborts, in
+    /// seconds.
+    ///
+    /// Long enough for three real attempts on a large window, short enough that
+    /// a model's `cua_screenshot` gets a dead engine and a reconnect instead of
+    /// a hang. The MCP row's 120 s tool-call timeout is not a substitute: the
+    /// engine would still be wedged for those 120 s, and the machine's capture
+    /// path with it.
+    static let deadline: TimeInterval = 12
+
+    /// Run `operation`, aborting the engine if it has not finished within `seconds`.
+    ///
+    /// A task-group race is **not** enough here, and it is worth saying why
+    /// because the obvious implementation is wrong. `withThrowingTaskGroup`
+    /// awaits its child tasks when the group goes out of scope, so throwing the
+    /// timeout from the racing arm still blocks until the capture task returns —
+    /// and a wedged capture never returns. Measured behaviour: the process spins
+    /// at ~19% CPU forever while holding the machine's capture path.
+    ///
+    /// There is no way to cancel a ScreenCaptureKit call that has stopped
+    /// answering, so the choice is between hanging forever and stopping the
+    /// engine. Stopping it is safe and self-healing: the MCP client's reconnect
+    /// policy starts a fresh engine, and once the wedged process is gone the
+    /// capture path recovers for every other process on the machine — verified
+    /// by killing the wedged engine and watching the next capture succeed.
+    ///
+    /// `_exit` rather than `exit`: the wedged call may hold locks, and a clean
+    /// shutdown would try to run them. Nothing here needs flushing — every
+    /// response is written as soon as it is produced, so the only work lost is
+    /// the capture that already failed.
+    ///
+    /// - Throws: the operation's own error, or a deadline error if it never
+    ///   returns (in practice the process ends first; the throw covers the race
+    ///   where the watchdog has not fired yet).
+    private static func withDeadline<T>(
+        _ seconds: TimeInterval,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        let watchdog = Task.detached {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            let message = "cua-engine: screen capture did not finish within \(Int(seconds))s; "
+                + "ScreenCaptureKit stopped responding. Stopping this engine so the machine's "
+                + "capture path recovers for every other process; the next call starts a new one.\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            _exit(75)
+        }
+        defer { watchdog.cancel() }
+        return try await operation()
     }
 
     /// One capture attempt; see `captureImage` for the retry policy.
@@ -107,7 +200,7 @@ enum Capture {
     /// Capturing at each target's native density and downscaling afterwards is
     /// simpler, correct on every layout, and what makes the measured `scale`
     /// trustworthy.
-    private static func captureOnce(_ request: inout Request) async throws -> CGImage {
+    private static func captureOnce(_ request: Request) async throws -> CGImage {
         if let window = request.window {
             // `desktopIndependentWindow` captures exactly the window at its own
             // native density, so neither a `sourceRect` nor an output size is set

@@ -42,6 +42,7 @@ const TREE_NODE_SCHEMA = {
 export function observationTools(ctx: Context, tools: ToolContext): ToolDefinition[] {
   return [
     statusTool(ctx, tools),
+    requestPermissionsTool(tools),
     displaysTool(tools),
     appsTool(tools),
     windowsTool(tools),
@@ -57,57 +58,111 @@ function statusTool(ctx: Context, tools: ToolContext): ToolDefinition {
     description: 'Report the state of the Computer Use engine: which operating system it drives, which permissions macOS has granted it, and exactly what to do about any that are missing. '
       + 'Call this first whenever a Computer Use tool reports a permission problem, and before promising a user that screenshots or input will work. '
       + 'It also reports whether the screen is locked, which blocks captures and makes input unreliable. '
-      + 'With request=true it also raises the macOS permission prompts.',
-    parameters: {
-      request: { type: 'boolean', description: 'Raise the macOS permission prompts for anything still missing. The user still has to confirm in System Settings.' },
-    },
+      + 'This is a pure read; `cua_request_permissions` is the tool that asks macOS to prompt.',
+    parameters: {},
     output: {
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          engineVersion: { type: 'string', required: true },
-          backend: { type: 'string', required: true },
-          platform: { type: 'string', required: true },
-          platformVersion: { type: 'string', required: true },
-          accessibility: { type: 'boolean', required: true },
-          screenRecording: { type: 'boolean', required: true },
-          ready: { type: 'boolean', required: true },
-          sessionLocked: { type: 'boolean', required: true },
-          missing: { type: 'array', items: { type: 'string' }, required: true },
-          hint: { type: 'string', required: true },
-          enginePath: { type: 'string', required: true },
-          eligibleTools: { type: 'array', items: { type: 'string' }, required: true },
-        },
-      },
+      schema: STATUS_SCHEMA,
       render: (_args, value) => text(renderStatus(value)),
     },
-    async execute(args, exec) {
-      const raw = args.request === true
-        ? await tools.engine.request<Record<string, unknown>>({ method: 'engine.request_permissions', timeoutMs: 20_000, signal: exec.signal })
-        : await tools.engine.request<Record<string, unknown>>({ method: 'engine.status', timeoutMs: 10_000, signal: exec.signal })
-      // `engine.status` nests the permission report under `permissions`; reading
-      // the outer object would silently report every permission as missing.
-      const report = toPermissionReport(raw.permissions ?? raw)
-      const engineVersion = str(raw.engine, 'unknown')
-      const backend = str(raw.backend, 'unknown')
-      return {
-        engineVersion,
-        backend,
-        platform: report.platform,
-        platformVersion: report.platformVersion,
-        accessibility: report.accessibility,
-        screenRecording: report.screenRecording,
-        ready: report.ready,
-        sessionLocked: report.sessionLocked,
-        missing: report.missing,
-        hint: report.hint,
-        enginePath: tools.engine.executablePath,
-        eligibleTools: eligibleTools(report),
-      }
+    async execute(_args, exec) {
+      const raw = await tools.engine.request<Record<string, unknown>>({ method: 'engine.status', timeoutMs: 10_000, signal: exec.signal })
+      return projectStatus(raw, tools)
     },
   })
 }
+
+/**
+ * `cua_request_permissions`: raise the macOS permission prompts.
+ *
+ * Separate from `cua_status` on purpose. It is the only tool in the catalog
+ * whose side effect is a system dialog, and folding it into the read made
+ * `cua_status` look like a write to every caller that reasons about the
+ * catalog. The engine names it separately over MCP as well, so keeping one
+ * tool per name is what holds the two integrations identical.
+ */
+function requestPermissionsTool(tools: ToolContext): ToolDefinition {
+  return defineTool({
+    name: 'cua_request_permissions',
+    description: 'Raise the macOS permission prompts for Accessibility and Screen Recording. '
+      + 'The user still has to confirm in System Settings, and the grant only applies to a new launch of the application named by cua_status. '
+      + 'Returns the same report as cua_status, re-read after the prompts were raised.',
+    parameters: {},
+    output: {
+      schema: STATUS_SCHEMA,
+      render: (_args, value) => text(renderStatus(value)),
+    },
+    async execute(_args, exec) {
+      const raw = await tools.engine.request<Record<string, unknown>>({ method: 'engine.request_permissions', timeoutMs: 20_000, signal: exec.signal })
+      return projectStatus(raw, tools)
+    },
+  })
+}
+
+/**
+ * Project one engine permission payload into the status tool's canonical value.
+ *
+ * `engine.status` nests the report under `permissions` while
+ * `engine.request_permissions` returns it flat, so both shapes are accepted
+ * here — reading only the nested one silently reported every permission as
+ * missing for the request path.
+ *
+ * @param raw - the engine's response object.
+ * @param tools - tool context, for the engine path.
+ * @returns the status value both tools share.
+ */
+function projectStatus(raw: Record<string, unknown>, tools: ToolContext): StatusValue {
+  const report = toPermissionReport(raw.permissions ?? raw)
+  return {
+    engineVersion: str(raw.engine, 'unknown'),
+    backend: str(raw.backend, 'unknown'),
+    platform: report.platform,
+    platformVersion: report.platformVersion,
+    accessibility: report.accessibility,
+    screenRecording: report.screenRecording,
+    ready: report.ready,
+    sessionLocked: report.sessionLocked,
+    missing: report.missing,
+    hint: report.hint,
+    enginePath: tools.engine.executablePath,
+    eligibleTools: eligibleTools(report),
+  }
+}
+
+/** The canonical value of both permission-reporting tools. */
+interface StatusValue {
+  engineVersion: string
+  backend: string
+  platform: string
+  platformVersion: string
+  accessibility: boolean
+  screenRecording: boolean
+  ready: boolean
+  sessionLocked: boolean
+  missing: string[]
+  hint: string
+  enginePath: string
+  eligibleTools: string[]
+}
+
+/** Output schema shared by `cua_status` and `cua_request_permissions`. */
+const STATUS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    engineVersion: { type: 'string', required: true },
+    backend: { type: 'string', required: true },
+    platform: { type: 'string', required: true },
+    platformVersion: { type: 'string', required: true },
+    accessibility: { type: 'boolean', required: true },
+    screenRecording: { type: 'boolean', required: true },
+    ready: { type: 'boolean', required: true },
+    sessionLocked: { type: 'boolean', required: true },
+    missing: { type: 'array', items: { type: 'string' }, required: true },
+    hint: { type: 'string', required: true },
+    enginePath: { type: 'string', required: true },
+    eligibleTools: { type: 'array', items: { type: 'string' }, required: true },
+  },
+} as const
 
 /** Which tool families the current permissions support. */
 function eligibleTools(report: PermissionReport): string[] {

@@ -142,7 +142,7 @@ const definitions = ctx.tools.calls.filter(([method]) => method === 'register').
 const names = definitions.map(definition => definition.name).sort()
 check(definitions.length >= 8, 'registered the Computer Use tool set', `${String(definitions.length)} tools`)
 check(
-  names.join(',') === 'cua_app,cua_apps,cua_click,cua_displays,cua_element,cua_key,cua_screenshot,cua_status,cua_tree,cua_type,cua_windows',
+  names.join(',') === 'cua_app,cua_apps,cua_click,cua_displays,cua_element,cua_key,cua_request_permissions,cua_screenshot,cua_status,cua_tree,cua_type,cua_windows',
   'registered exactly the documented tools',
   names.join(','),
 )
@@ -277,6 +277,56 @@ if (status.accessibility) {
 }
 
 if (status.screenRecording && !status.sessionLocked) {
+  await captureChecks()
+} else if (status.sessionLocked) {
+  // A locked console fails every capture; the tool must say so rather than
+  // relaying ScreenCaptureKit's opaque stream error.
+  process.stdout.write('  (the screen is locked; asserting the locked-session error instead of capturing)\n')
+  let reported = false
+  try {
+    await callTool(definitions, 'cua_screenshot', {})
+  } catch (error) {
+    reported = /screen is locked/u.test(String(error.message))
+  }
+  check(reported, 'cua_screenshot names the locked session instead of a stream error')
+  check(status.ready === false, 'cua_status reports not-ready while the screen is locked')
+} else {
+  process.stdout.write('  (Screen Recording is not granted; skipping capture checks)\n')
+  let gated = false
+  try {
+    await callTool(definitions, 'cua_screenshot', {})
+  } catch (error) {
+    gated = /Screen Recording/u.test(String(error.message))
+  }
+  check(gated, 'cua_screenshot refuses without Screen Recording permission')
+}
+
+/**
+ * Assert capture behaviour against the real screen.
+ *
+ * Skipped by default when this script is not running inside the host's process
+ * tree, because macOS attributes the Screen Recording grant to the application
+ * responsible for the process — the host application, not `cua-engine`. An
+ * engine spawned from a terminal therefore has no capture attribution at all,
+ * and its first ScreenCaptureKit call does not fail: it stops answering. The
+ * engine's own watchdog turns that into a stopped engine after 12 s (verified by
+ * `check-capture-deadline.mjs`), which is a correct engine and a useless test.
+ *
+ * So the capture assertions run where capture actually works: through the MCP
+ * row, from a session hosted by the application that holds the grant. Run this
+ * script with `DSH_CUA_CAPTURE=1` to force them on anyway — useful when this
+ * script is itself launched from inside the host.
+ */
+async function captureChecks() {
+  if (process.env.DSH_CUA_CAPTURE !== '1') {
+    process.stdout.write(
+      '  (capture checks need the host process tree: an engine started from a terminal has no\n'
+      + '   Screen Recording attribution, so its first capture call never returns. Set\n'
+      + '   DSH_CUA_CAPTURE=1 if this script already runs inside the host. Skipping.)\n',
+    )
+    return
+  }
+
   const { value: shot } = await callTool(definitions, 'cua_screenshot', {})
   check(existsSync(shot.path), 'cua_screenshot wrote a file', shot.path)
   check(shot.pixelWidth > 0 && shot.pixelHeight > 0, 'cua_screenshot reports dimensions', `${String(shot.pixelWidth)}x${String(shot.pixelHeight)}`)
@@ -305,6 +355,20 @@ if (status.screenRecording && !status.sessionLocked) {
     `region ${JSON.stringify(front.region)}`,
   )
   check(front.windowId !== undefined && front.windowId !== null, 'a window capture reports its windowId', String(front.windowId))
+
+  // `app` must name the application that owns the captured window, not whichever
+  // application is frontmost when the capture finishes. The two differ as soon as
+  // focus moves mid-capture, which a perceive/act loop does constantly, and the
+  // caller has no other way to tell which application it is looking at.
+  const windowsForOwner = await callTool(definitions, 'cua_windows', { includeUntitled: true })
+  const owner = windowsForOwner.value.windows.find(window => window.windowId === front.windowId)
+  if (owner !== undefined) {
+    check(
+      front.app === owner.app,
+      'a window capture names the application that owns the window',
+      `reported "${String(front.app)}" for window ${String(front.windowId)} owned by "${String(owner.app)}"`,
+    )
+  }
 
   // A rectangle that only partly overlaps a display, and one spanning the gap
   // between two: both must capture the overlap and say so, not fail and not
@@ -344,27 +408,6 @@ if (status.screenRecording && !status.sessionLocked) {
       `${String(one.pixelWidth)}x${String(one.pixelHeight)}`,
     )
   }
-} else if (status.sessionLocked) {
-  // A locked console fails every capture; the tool must say so rather than
-  // relaying ScreenCaptureKit's opaque stream error.
-  process.stdout.write('  (the screen is locked; asserting the locked-session error instead of capturing)\n')
-  let reported = false
-  try {
-    await callTool(definitions, 'cua_screenshot', {})
-  } catch (error) {
-    reported = /screen is locked/u.test(String(error.message))
-  }
-  check(reported, 'cua_screenshot names the locked session instead of a stream error')
-  check(status.ready === false, 'cua_status reports not-ready while the screen is locked')
-} else {
-  process.stdout.write('  (Screen Recording is not granted; skipping capture checks)\n')
-  let gated = false
-  try {
-    await callTool(definitions, 'cua_screenshot', {})
-  } catch (error) {
-    gated = /Screen Recording/u.test(String(error.message))
-  }
-  check(gated, 'cua_screenshot refuses without Screen Recording permission')
 }
 
 // The engine outlives one tool call, so an index from one call must address the
