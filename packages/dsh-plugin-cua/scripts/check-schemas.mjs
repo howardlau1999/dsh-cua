@@ -16,11 +16,23 @@
 
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
 const require = createRequire(import.meta.url)
-const { validateJsonSchemaValue } = await import(require.resolve('@deepseek-ai/dsh-tools'))
+// `require.resolve` returns a native path, and a bare `C:\…` string is not a
+// URL the ESM loader accepts: on Windows it reads the drive letter as a scheme.
+const { validateJsonSchemaValue } = await import(
+  pathToFileURL(require.resolve('@deepseek-ai/dsh-tools')).href
+)
 
 const plugin = await import('../lib/index.js')
+
+/** The engine file name this host builds, matching `build-engine.mjs`. */
+
+/** The application and role vocabulary of the backend this host will drive. */
+const WINDOWS = process.platform === 'win32'
+const SAMPLE_APP = WINDOWS ? 'explorer' : 'Finder'
+const SAMPLE_ROLE = WINDOWS ? 'Button' : 'AXButton'
 
 const registered = []
 const sections = []
@@ -35,7 +47,7 @@ const ctx = {
   effect: () => {},
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
 }
-plugin.apply(ctx, plugin.Config({ enginePath: join(import.meta.dirname, '..', 'lib', 'bin', 'cua-engine') }))
+plugin.apply(ctx, plugin.Config({}))
 
 const failures = []
 let checks = 0
@@ -55,13 +67,13 @@ function check(condition, label, detail = '') {
 const SAMPLES = {
   cua_status: [{ request: false }],
   cua_displays: [{}],
-  cua_apps: [{ query: 'Finder', running: true }],
-  cua_windows: [{ app: 'Finder', includeUntitled: true }],
-  cua_tree: [{ app: 'Finder', maxDepth: 3, roles: ['AXButton'], includeGeometry: true }],
+  cua_apps: [{ query: SAMPLE_APP, running: true }],
+  cua_windows: [{ app: SAMPLE_APP, includeUntitled: true }],
+  cua_tree: [{ app: SAMPLE_APP, maxDepth: 3, roles: [SAMPLE_ROLE], includeGeometry: true }],
   cua_screenshot: [{ windowId: 1, format: 'png', maxWidth: 800 }],
   cua_click: [{ action: 'click', x: 10, y: 20, button: 'right', clickCount: 2 }],
   cua_type: [{ text: 'hello', perCharacterDelayMs: 10 }],
-  cua_key: [{ key: 's', modifiers: ['cmd', 'shift'] }],
+  cua_key: [{ key: 's', modifiers: WINDOWS ? ['ctrl', 'shift'] : ['cmd', 'shift'] }],
   cua_element: [{ element: 3, action: 'setValue', text: 'x' }],
   cua_app: [{ action: 'openURL', url: 'https://example.com' }],
 }

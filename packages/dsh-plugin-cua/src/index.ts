@@ -5,8 +5,8 @@
  * registration, the write-approval gate, and the model-facing guidance, while
  * every operating-system capability lives in the `cua-engine` helper. That split
  * is deliberate — it keeps the process that holds the Accessibility and Screen
- * Recording grants small and auditable, and it lets a second platform backend
- * arrive without touching the tool surface.
+ * Recording grants small and auditable, and it is what let a second platform
+ * backend arrive without touching the tool surface.
  *
  * @module
  */
@@ -21,6 +21,7 @@ import { observationTools } from './tools-observe.ts'
 import { interactionTools } from './tools-interact.ts'
 import { applicationTools } from './tools-app.ts'
 import { type ToolContext } from './shared.ts'
+import { copy, platform } from './platform.ts'
 
 export { Config } from './config.ts'
 export type { Config as CuaPluginConfig, WriteApprovalMode } from './config.ts'
@@ -35,8 +36,26 @@ export const inject = ['tools', 'systemPrompt']
 /** Section order: after the harness's own tool guidance, before trailing context. */
 const PROMPT_SECTION_ORDER = 900
 
-/** Where the compiled engine sits inside an installed plugin package. */
-const ENGINE_RELATIVE_PATH = join('lib', 'bin', 'cua-engine')
+/**
+ * The engine executable's name inside the package's `lib/bin`.
+ *
+ * The two backends are separate builds of separate programs — a Swift binary
+ * and a .NET executable — and Windows only runs an executable it finds by its
+ * full name, extension included.
+ */
+const ENGINE_EXECUTABLE = platform === 'windows' ? 'cua-engine.exe' : 'cua-engine'
+
+/**
+ * Where the compiled engine sits inside an installed plugin package.
+ *
+ * Windows has two layouts, because the build can publish either way: a folder
+ * (`lib/bin/cua-engine/cua-engine.exe`, the default — it ships its dependencies
+ * beside the executable and self-extracts nothing) or a single file at the top
+ * of `lib/bin`. macOS always installs a single file named `cua-engine`.
+ */
+const ENGINE_RELATIVE_PATHS = platform === 'windows'
+  ? [join('lib', 'bin', 'cua-engine', 'cua-engine.exe'), join('lib', 'bin', 'cua-engine.exe')]
+  : [join('lib', 'bin', 'cua-engine')]
 
 /**
  * The guidance a session gets whenever the plugin is loaded.
@@ -47,9 +66,9 @@ const ENGINE_RELATIVE_PATH = join('lib', 'bin', 'cua-engine')
  */
 const GUIDANCE = `## Computer Use
 
-You can see and operate the macOS desktop through the \`cua_*\` tools. They drive
-the user's real machine: a click moves their pointer, typing lands in whatever
-has focus, and an Apple event can change another application's documents.
+You can see and operate the ${copy.osName} desktop through the \`cua_*\` tools. They
+drive the user's real machine: a click moves their pointer, typing lands in whatever
+has focus, and an application action can change another program's state.
 
 ### Perceive before acting, and re-perceive after
 
@@ -64,40 +83,41 @@ Read the UI before you touch it, and verify after. Two independent ways to see:
 - \`cua_screenshot\` — pixels, saved to a file. Use it for canvas content,
   images, rendered layout, and anything the tree does not expose. The result
   carries the path (read it with \`read_image\` to actually see it), plus the
-  captured \`region\` in screen points and \`scale\` (image pixels per screen
-  point). A feature at image pixel (px, py) is at screen point
+  captured \`region\` in screen coordinates and \`scale\` (image pixels per screen
+  unit). A feature at image pixel (px, py) is at screen point
   \`(region.x + px/scale, region.y + py/scale)\`.
 
 ### Prefer the highest-level mechanism that can do the job
 
 In descending order of reliability:
 
-1. \`cua_app\` with a \`script\` action — the target application performs the
-   work itself. Best for any scriptable app.
-2. \`cua_app\` with \`activate\`, \`menu\`, \`openURL\`, \`quit\` — direct API calls,
-   no pointer involved.
-3. \`cua_element\` — ask an element to perform its own action (\`press\`,
+1. \`cua_app\` — activate, menu, openURL, quit, hide: direct API calls, no
+   pointer involved.${platform === 'macos' ? ' On macOS a \`script\` action goes further still: the application performs the work itself through an Apple event.' : ''}
+2. \`cua_element\` — ask an element to perform its own action (\`press\`,
    \`setValue\`, \`focus\`). Works on background windows and cannot miss.
-5. \`cua_click\` / \`cua_type\` without an element / \`cua_key\` — synthesized input
+3. \`cua_type\` with an \`element\` — focus a specific control and type into it.
+4. \`cua_click\` / \`cua_type\` without an element / \`cua_key\` — synthesized input
    aimed at whatever is frontmost. Necessary for canvas apps and anything with
    no accessibility surface, but it depends on window positions and focus.
 
-Coordinates everywhere are **top-left-origin screen points**: the same space
+Coordinates everywhere are **top-left-origin screen coordinates**: the same space
 \`cua_windows\` frames and \`cua_tree\` geometry use, and the space screenshots
 convert into. A right-click needs \`button: "right"\`; a shortcut needs
 \`cua_key\` (\`cua_type\` would type the characters literally).
 
 On a machine with more than one display, call \`cua_displays\` before doing
-coordinate arithmetic. Secondary displays can sit at negative x or y, each may
-have a different pixel density, and a point outside every display is rejected
-rather than clamped. Take the pixel-to-point scale from the screenshot result in
-hand — it is measured per capture, not a constant.
+coordinate arithmetic. Secondary displays can sit at negative x or y, and a point
+outside every display is rejected rather than clamped. Take the pixel-to-point
+scale from the screenshot result in hand — it is measured per capture, not a
+constant.
 
 ### Permissions
 
-\`cua_status\` reports exactly which macOS permissions are granted and what to do
-about the rest. Accessibility covers trees, input, and element actions; Screen
-Recording covers screenshots. When a tool reports a permission problem, call
+\`cua_status\` reports exactly what this machine grants the engine and what to do
+about the rest.${platform === 'macos'
+    ? ' Accessibility covers trees, input, and element actions; Screen Recording covers screenshots.'
+    : ' Windows grants UI Automation, screen capture, and input synthesis to every process, so nothing has to be enabled; the one limit is elevation, which cua_status reports.'}
+When a tool reports a permission problem, call
 \`cua_status\` and relay its remediation to the user — do not retry the same call
 hoping for a different result.
 
@@ -121,6 +141,10 @@ export function apply(ctx: Context, config: CuaConfig = {}): void {
 
   const engine = new EngineClient({
     executablePath: enginePath,
+    // Capability flags the engine cannot infer. On macOS this list is empty and
+    // `cua_app script` is always available; on Windows it is what turns a
+    // PowerShell escape hatch on.
+    args: platform === 'windows' && config.allowedScript === true ? ['--allow-script'] : [],
     ...config.idleShutdownMs === undefined ? {} : { idleShutdownMs: config.idleShutdownMs },
   })
   // One process per host, torn down with the plugin fiber rather than leaked.
@@ -143,7 +167,7 @@ export function apply(ctx: Context, config: CuaConfig = {}): void {
   for (const tool of applicationTools(ctx, tools, mode)) ctx.tools.register(tool)
 
   ctx.logger.info(
-    `dsh-plugin-cua ready: engine ${enginePath}, write approval "${mode}"`,
+    `dsh-plugin-cua ready: engine ${enginePath} (${platform}), write approval "${mode}"`,
   )
 }
 
@@ -151,7 +175,7 @@ export function apply(ctx: Context, config: CuaConfig = {}): void {
  * Resolve the engine executable.
  *
  * Order: explicit configuration, then the binary shipped inside this package,
- * then a debug build from a source checkout. The last one keeps the plugin
+ * then a debug build from a source checkout. The last ones keep the plugin
  * usable during development without a packaging step, and every failure names
  * the exact command that produces the missing file.
  *
@@ -165,9 +189,13 @@ export function resolveEnginePath(config: CuaConfig, ctx?: Pick<Context, 'logger
   const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
   const candidates = [
     ...config.enginePath === undefined ? [] : [config.enginePath],
-    join(packageRoot, ENGINE_RELATIVE_PATH),
+    ...ENGINE_RELATIVE_PATHS.map(relative => join(packageRoot, relative)),
+    // A SwiftPM build is macOS-only, and a `dotnet build` is Windows-only; each
+    // is listed so a source checkout works without a packaging step.
     join(packageRoot, 'native', 'cua-engine', '.build', 'out', 'Products', 'Debug', 'cua-engine'),
     join(packageRoot, 'native', 'cua-engine', '.build', 'out', 'Products', 'Release', 'cua-engine'),
+    join(packageRoot, 'native', 'cua-engine-win', 'bin', 'Release', 'net9.0-windows', 'cua-engine.exe'),
+    join(packageRoot, 'native', 'cua-engine-win', 'bin', 'Debug', 'net9.0-windows', 'cua-engine.exe'),
   ]
   for (const candidate of candidates) {
     if (existsSync(candidate)) return resolve(candidate)

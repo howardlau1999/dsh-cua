@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Windows backend of `cua-engine`.
+
+    `UseWPF` is here for the imaging stack, not for a UI: WPF ships the only
+    in-box PNG/JPEG encoders and resamplers available to a .NET console process
+    without pulling a NuGet package, and `System.Drawing.Common` is not part of
+    the shared framework at all. It also brings in `System.Windows.Automation`,
+    the managed UI Automation client, so the whole engine builds offline against
+    the targeting packs that ship with the Windows SDK.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>CuaEngine</RootNamespace>
+    <AssemblyName>cua-engine</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!--
+      The engine writes JSON to stdout and diagnostics to stderr; a stray
+      culture-sensitive format would corrupt a coordinate on a machine whose
+      locale uses a decimal comma.
+    -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <EnableWindowsTargeting>false</EnableWindowsTargeting>
+    <!-- Trimming and AOT both break COM interop and the UIA client's reflection. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishAot>false</PublishAot>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <!--
+    Version and identify resources.
+
+    Not cosmetic. An unsigned executable that describes itself as "cua-engine"
+    in every field, with no company and no copyright, is exactly the shape of a
+    packed payload, and it is one of the signals antivirus reputation scoring
+    weighs. Filling these in does not make the engine trusted, but leaving them
+    blank makes it look deliberately anonymous. `Version` is kept in step with
+    `EngineIdentity.Version` in src/Protocol.cs, which is what the engine reports
+    over the wire.
+  -->
+  <PropertyGroup>
+    <Version>0.2.0</Version>
+    <FileVersion>0.2.0.0</FileVersion>
+    <AssemblyVersion>0.2.0.0</AssemblyVersion>
+    <AssemblyTitle>Computer Use engine for DeepSeek Harness</AssemblyTitle>
+    <Product>DeepSeek Harness — Computer Use plugin</Product>
+    <Company>dsh-cua contributors</Company>
+    <Description>Drives the Windows desktop for the DeepSeek Harness Computer Use plugin: UI Automation control trees, SendInput pointer and keyboard synthesis, and GDI screen capture, over a line-oriented JSON protocol on stdio.</Description>
+    <Copyright>MIT licensed. Open source: https://github.com/deepseek-ai/dsh-cua</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+  </PropertyGroup>
+
+</Project>

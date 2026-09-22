@@ -2,3 +2,5 @@ node_modules/
 lib/
 .build/
 *.tsbuildinfo
+bin/
+obj/

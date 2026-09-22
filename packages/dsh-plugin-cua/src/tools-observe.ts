@@ -18,6 +18,7 @@ import {
   arr, formatWindow, num, obj, str, text, toAppRow, toPermissionReport, toTreeNode, toWindowRow,
   type PermissionReport, type ToolContext,
 } from './shared.ts'
+import { copy } from './platform.ts'
 
 /** The tree node shape the engine emits, as the tool's canonical value. */
 const TREE_NODE_SCHEMA = {
@@ -54,12 +55,12 @@ export function observationTools(ctx: Context, tools: ToolContext): ToolDefiniti
 function statusTool(ctx: Context, tools: ToolContext): ToolDefinition {
   return defineTool({
     name: 'cua_status',
-    description: 'Report the state of the Computer Use engine: which operating system it drives, which permissions macOS has granted it, and exactly what to do about any that are missing. '
+    description: `Report the state of the Computer Use engine: which operating system it drives, which permissions ${copy.osName} has granted it, and exactly what to do about any that are missing. `
       + 'Call this first whenever a Computer Use tool reports a permission problem, and before promising a user that screenshots or input will work. '
       + 'It also reports whether the screen is locked, which blocks captures and makes input unreliable. '
-      + 'With request=true it also raises the macOS permission prompts.',
+      + `With request=true it ${copy.requestHelp.charAt(0).toLowerCase()}${copy.requestHelp.slice(1)}`,
     parameters: {
-      request: { type: 'boolean', description: 'Raise the macOS permission prompts for anything still missing. The user still has to confirm in System Settings.' },
+      request: { type: 'boolean', description: `Ask for anything still missing. ${copy.requestHelp}` },
     },
     output: {
       schema: {
@@ -142,13 +143,20 @@ function renderStatus(value: {
   eligibleTools: string[]
 }): string {
   const permission = (granted: boolean): string => granted ? 'granted' : 'MISSING'
+  // The permission *names* are platform facts: a macOS user is looking for
+  // "Accessibility" and "Screen Recording" in System Settings, while Windows has
+  // no such switches at all, and naming them would send someone hunting for a
+  // setting that does not exist.
+  const labels = copy.osName === 'Windows'
+    ? { accessibility: 'UI Automation access', screenRecording: 'Screen capture' }
+    : { accessibility: 'Accessibility', screenRecording: 'Screen Recording' }
   const lines = [
     `Computer Use engine ${value.engineVersion} on ${value.platform} ${value.platformVersion} (backend ${value.backend}).`,
-    `Accessibility: ${permission(value.accessibility)}. Screen Recording: ${permission(value.screenRecording)}. `
+    `${labels.accessibility}: ${permission(value.accessibility)}. ${labels.screenRecording}: ${permission(value.screenRecording)}. `
       + `Screen: ${value.sessionLocked ? 'LOCKED' : 'unlocked'}.`,
     `Engine binary: ${value.enginePath}`,
     '',
-    value.ready ? 'All permissions are granted and the screen is unlocked.' : value.hint,
+    value.ready ? `All permissions are granted and the screen is unlocked.` : value.hint,
     '',
     `Available with the current permissions: ${value.eligibleTools.join(', ')}.`,
   ]
@@ -159,9 +167,9 @@ function renderStatus(value: {
 function displaysTool(tools: ToolContext): ToolDefinition {
   return defineTool({
     name: 'cua_displays',
-    description: 'Describe the display layout: each screen\'s id, its rectangle in top-left-origin screen points, and its pixel density. '
+    description: 'Describe the display layout: each screen\'s id, its rectangle in top-left-origin screen coordinates, and its pixel density. '
       + 'Call this before computing coordinates by hand on a multi-display machine — secondary displays can sit at negative x or y, and each may have a different pixel density, so neither the valid ranges nor the screenshot scale can be assumed. '
-      + 'Requires no macOS permission.',
+      + `Requires no permission on ${copy.osName}.`,
     parameters: {},
     output: {
       schema: {
@@ -235,10 +243,10 @@ function appsTool(tools: ToolContext): ToolDefinition {
   return defineTool({
     name: 'cua_apps',
     description: 'List applications on this machine: running applications by default, or everything installed under the standard application directories. '
-      + 'Use it to discover the exact name, bundle id, or pid that the other Computer Use tools take as a target. '
-      + 'Requires no macOS permission.',
+      + `Use it to discover the exact name, ${copy.appIdNoun}, or pid that the other Computer Use tools take as a target. `
+      + `Requires no permission on ${copy.osName}.`,
     parameters: {
-      query: { type: 'string', description: 'Case-insensitive substring matched against the application name and bundle id.' },
+      query: { type: 'string', description: `Case-insensitive substring matched against the application name and ${copy.appIdNoun}.` },
       running: { type: 'boolean', description: 'List running applications (default true) instead of installed ones.' },
       includeBackground: { type: 'boolean', description: 'Include windowless background helpers such as WebKit content processes. Off by default because they are rarely the intended target.' },
     },
@@ -307,10 +315,10 @@ function windowsTool(tools: ToolContext): ToolDefinition {
   return defineTool({
     name: 'cua_windows',
     description: 'List on-screen windows with their window id, owning application, title, and screen rectangle. '
-      + 'The returned `windowId` feeds cua_screenshot and cua_tree; the `frame` is in global screen points with the origin at the top-left of the main display, which is the same space cua_click takes. '
-      + 'Requires Accessibility permission.',
+      + 'The returned `windowId` feeds cua_screenshot and cua_tree; the `frame` is in global screen coordinates with the origin at the top-left of the main display, which is the same space cua_click takes. '
+      + copy.treePermission,
     parameters: {
-      app: { type: 'string', description: 'Restrict to applications whose name or bundle id contains this text.' },
+      app: { type: 'string', description: `Restrict to applications whose name or ${copy.appIdNoun} contains this text.` },
       pid: { type: 'integer', description: 'Restrict to one process id.' },
       frontmost: { type: 'boolean', description: 'Only the frontmost application.' },
       includeUntitled: { type: 'boolean', description: 'Include windows with no title, such as the Finder desktop (default true).' },
@@ -398,7 +406,7 @@ function treeTool(tools: ToolContext): ToolDefinition {
       maxDepth: { type: 'integer', description: 'Maximum tree depth (default 8). Structural wrappers do not consume depth.' },
       nodeLimit: { type: 'integer', description: 'Maximum emitted nodes (default 1200).' },
       interactiveOnly: { type: 'boolean', description: 'Emit only elements a user can act on: buttons, fields, links, tabs, and menu items.' },
-      roles: { type: 'array', items: { type: 'string' }, description: 'Keep only these accessibility roles, such as ["AXButton","AXTextField"]. Ancestors with text are kept so matches stay anchored.' },
+      roles: { type: 'array', items: { type: 'string' }, description: `Add these accessibility roles to the output, such as ${copy.roleExamples}. This widens rather than restricts: any element carrying text is listed as well, so a match stays anchored in its surroundings.` },
       textLimit: { type: 'integer', description: 'Truncate every text value to this many characters (default 200).' },
       includeGeometry: { type: 'boolean', description: 'Include each element frame as [x, y, width, height] in top-left-origin screen points. Needed before clicking an element by coordinate.' },
       includeStructural: { type: 'boolean', description: 'Include layout wrappers such as AXGroup and AXScrollArea, which are otherwise folded away.' },
@@ -416,6 +424,7 @@ function treeTool(tools: ToolContext): ToolDefinition {
           nodeCount: { type: 'integer', required: true },
           visitedCount: { type: 'integer', required: true },
           truncatedBy: { type: 'string' },
+          note: { type: 'string' },
           elapsedMs: { type: 'integer', required: true },
           outline: { type: 'string', required: true },
           nodes: { type: 'array', required: true, items: TREE_NODE_SCHEMA },
@@ -425,11 +434,15 @@ function treeTool(tools: ToolContext): ToolDefinition {
         const truncated = value.truncatedBy === undefined
           ? ''
           : `\n\nTRUNCATED by ${value.truncatedBy}: this is a partial view. Narrow it with roles, maxDepth, windowId, or a larger nodeLimit.`
+        // The engine's own explanation of why a tree is unexpectedly bare —
+        // Windows withholding an elevated window's contents, for instance —
+        // outranks anything this layer could infer from the node count.
+        const note = value.note === undefined ? '' : `\n\n${value.note}`
         const header = `${value.app} (pid ${value.pid})${value.windowTitle === undefined ? '' : ` — window "${value.windowTitle}"`}: `
           + `${value.nodeCount} node(s) shown, ${value.visitedCount} visited, ${value.elapsedMs}ms. `
           + 'Indices address elements in cua_element / cua_click / cua_key; "actionable" marks elements a user can act on.'
         const outline = value.outline === '' ? '(no element matched the filter)' : value.outline
-        return text(`${header}\n\n${outline}${truncated}`)
+        return text(`${header}\n\n${outline}${truncated}${note}`)
       },
     },
     async execute(args, exec) {
@@ -456,6 +469,7 @@ function treeTool(tools: ToolContext): ToolDefinition {
       })
       const windowTitle = str(raw.windowTitle)
       const truncatedBy = str(raw.truncatedBy)
+      const note = str(raw.note)
       return {
         app: str(raw.app),
         pid: num(raw.pid, -1),
@@ -463,6 +477,7 @@ function treeTool(tools: ToolContext): ToolDefinition {
         nodeCount: num(raw.nodeCount),
         visitedCount: num(raw.visitedCount),
         ...truncatedBy === '' ? {} : { truncatedBy },
+        ...note === '' ? {} : { note },
         elapsedMs: num(raw.elapsedMs),
         outline: str(raw.text),
         nodes: arr(raw.nodes).map(toTreeNode),
@@ -478,19 +493,19 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
     description: 'Capture a window, a display, or a rectangle of the screen and save it as a PNG or JPEG file. '
       + 'The file path is returned; read it with the read_image tool to actually see the pixels. '
       + 'Prefer cua_tree for reading a UI — use screenshots for canvas content, images, rendered layout, and anything the accessibility tree does not expose. '
-      + 'The result reports `region` (the captured rectangle in top-left-origin screen points) and `scale` (image pixels per screen point), so a feature seen at image pixel (px, py) is clicked at screen point (region.x + px/scale, region.y + py/scale). '
+      + 'The result reports `region` (the captured rectangle in top-left-origin screen coordinates) and `scale` (image pixels per screen unit), so a feature seen at image pixel (px, py) is clicked at screen point (region.x + px/scale, region.y + py/scale). '
       + 'On a multi-display setup `scale` differs per display — use the scale from this result, never a remembered one — and `displayId` names which screen the capture came from. Call cua_displays to see the layout before computing coordinates by hand. '
-      + 'Requires Screen Recording permission.',
+      + copy.capturePermission,
     parameters: {
       windowId: { type: 'integer', description: 'Capture this window (from cua_windows). Captures the window itself, even if another window covers it.' },
       pid: { type: 'integer', description: 'Capture the main window of this process.' },
       app: { type: 'string', description: 'Capture the frontmost window of the named application.' },
       displayId: { type: 'integer', description: 'Capture a whole display by id.' },
       windowTitle: { type: 'string', description: 'With pid or app, pick the window whose title contains this text.' },
-      x: { type: 'integer', description: 'Left edge of a region to capture, in screen points. Requires y, width, and height.' },
-      y: { type: 'integer', description: 'Top edge of the region, in screen points.' },
-      width: { type: 'integer', description: 'Region width in screen points.' },
-      height: { type: 'integer', description: 'Region height in screen points.' },
+      x: { type: 'integer', description: 'Left edge of a region to capture, in screen coordinates. Requires y, width, and height.' },
+      y: { type: 'integer', description: 'Top edge of the region.' },
+      width: { type: 'integer', description: 'Region width.' },
+      height: { type: 'integer', description: 'Region height.' },
       format: { type: 'string', enum: ['png', 'jpeg'], description: 'Image format (default png; jpeg is smaller for photographic content).' },
       quality: { type: 'number', description: 'JPEG quality 0.1–1.0 (default 0.8).' },
       maxWidth: { type: 'integer', description: 'Downscale so the image is at most this many pixels wide.' },
@@ -523,7 +538,7 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
           `<path>${value.path}</path>\n`
           + `Captured ${value.target}${onDisplay}: ${value.pixelWidth}x${value.pixelHeight} px (${value.byteLength} bytes, ${value.mimeType}).\n`
           + `Captured screen region: x=${value.region[0]} y=${value.region[1]} width=${value.region[2]} height=${value.region[3]} `
-          + `(top-left-origin screen points); image pixels per screen point = ${axes}.\n`
+          + `(top-left-origin screen coordinates); image pixels per screen unit = ${axes}.\n`
           + 'To see it, read this path with read_image. To click something you see at image pixel (px, py), '
           + `click (${value.region[0]} + px/${value.scale}, ${value.region[1]} + py/${value.scaleY}).`,
         )
