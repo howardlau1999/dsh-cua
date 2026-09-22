@@ -499,6 +499,54 @@ process.stdout.write('\nauthorization\n')
   check(refused, 'a write is refused when no approver is mounted')
 }
 
+// ------------------------------------------------------------ computer use
+
+process.stdout.write('\ncomputer use\n')
+{
+  // A deployment without the harness's computer-use service must load exactly as
+  // it did before the plugin knew about it: reached, not injected, so a missing
+  // service is not a load failure.
+  const plain = fakeContext()
+  let loaded = true
+  try {
+    plugin.apply(plain, config)
+  } catch (error) {
+    loaded = false
+    check(false, 'the plugin loads without a computer-use service', String(error))
+  }
+  if (loaded) check(true, 'the plugin loads without a computer-use service')
+  check(
+    plain.effects.every(factory => typeof factory === 'function'),
+    'no computer-use effect is registered when the service is absent',
+  )
+
+  // With the service mounted, the plugin must claim the slot under its own name
+  // and give it back on disposal. `effect` is driven here rather than recorded,
+  // because registration happens inside the factory.
+  const registered = []
+  const released = []
+  const disposers = []
+  const honoring = {
+    ...plain,
+    get: key => key === 'computerUse'
+      ? { register: name => { registered.push(name); return async () => { released.push(name) } } }
+      : key === 'tools' || key === 'systemPrompt' ? plain[key] : undefined,
+    effect: factory => { disposers.push(factory()) },
+  }
+  plugin.apply(honoring, config)
+  check(
+    registered.length === 1 && registered[0] === 'cua',
+    'the plugin claims the computer-use slot as "cua"',
+    JSON.stringify(registered),
+  )
+  for (const dispose of disposers) await dispose()
+  check(
+    released.length === 1 && released[0] === 'cua',
+    'unloading the plugin releases the computer-use slot',
+    JSON.stringify(released),
+  )
+}
+
 if (allowWrites && status.accessibility) {
   process.stdout.write('\nwrites (--write)\n')
   const permissive = fakeContext()

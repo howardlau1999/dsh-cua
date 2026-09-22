@@ -321,12 +321,82 @@ final class MacHost: PlatformHost, @unchecked Sendable {
         ])
     }
 
+    /// What an application contributes to a query decision.
+    ///
+    /// Split out from `NSRunningApplication` so the ranking below is a pure
+    /// function of the facts it actually uses, and can therefore be tested
+    /// without a desktop. The defect this guards against — a Dock helper
+    /// outranking the application a user meant — is a property of names and
+    /// activation policies, not of anything AppKit knows.
+    struct ApplicationCandidate: Equatable {
+        /// Localized display name, as the query is matched against it.
+        let name: String
+        /// Bundle identifier.
+        let bundleId: String
+        /// Whether this is a regular (Dock-visible, window-owning) application.
+        let regular: Bool
+
+        init(name: String?, bundleId: String?, regular: Bool) {
+            self.name = (name ?? "").lowercased()
+            self.bundleId = (bundleId ?? "").lowercased()
+            self.regular = regular
+        }
+    }
+
+    /// How well one application answers a query, or `nil` when it does not.
+    ///
+    /// The order is the whole point: an exact name or bundle-id match first,
+    /// then a regular application over a background helper, then the
+    /// application's name. Without the second test an ambiguous query resolves
+    /// to whichever helper the window server happens to list first — the
+    /// `com.apple.dock.helper` / `DockHelper.xpc` pair is the case that was
+    /// measured, and it owns a window, so nothing else distinguishes it.
+    ///
+    /// - Parameters:
+    ///   - candidate: the application, reduced to the facts a query judges.
+    ///   - query: an already-lowercased substring.
+    /// - Returns: a comparable rank, or `nil` when the query does not match.
+    static func matchRank(_ candidate: ApplicationCandidate, query: String) -> ApplicationMatch? {
+        let exact = isExactMatch(candidate, query)
+        guard exact || candidate.name.contains(query) || candidate.bundleId.contains(query) else { return nil }
+        return ApplicationMatch(candidate: candidate, exact: exact)
+    }
+
+    /// `matchRank`'s result, carrying the inputs needed to order two ranks.
+    struct ApplicationMatch: Comparable {
+        let candidate: ApplicationCandidate
+        let exact: Bool
+
+        /// Whether neither application is a strictly better answer, so both
+        /// should be returned for the caller to choose between.
+        func ties(with other: ApplicationMatch) -> Bool {
+            exact == other.exact && candidate.regular == other.candidate.regular
+        }
+
+        static func < (left: ApplicationMatch, right: ApplicationMatch) -> Bool {
+            if left.exact != right.exact { return left.exact }
+            if left.candidate.regular != right.candidate.regular { return left.candidate.regular }
+            if left.candidate.name != right.candidate.name { return left.candidate.name < right.candidate.name }
+            // A total order, so the result does not depend on the window
+            // server's listing order when two applications tie on everything
+            // above.
+            return left.candidate.bundleId < right.candidate.bundleId
+        }
+    }
+
+    /// Whether an application's name or bundle id equals the query exactly.
+    static func isExactMatch(_ candidate: ApplicationCandidate, _ query: String) -> Bool {
+        let bare = candidate.bundleId.split(separator: ".").last.map(String.init) ?? candidate.bundleId
+        return candidate.name == query || candidate.bundleId == query || bare == query
+    }
+
     /// Whether an application's name or bundle id equals the query exactly.
     static func isExactMatch(_ app: NSRunningApplication, _ query: String) -> Bool {
-        let name = (app.localizedName ?? "").lowercased()
-        let bundleId = (app.bundleIdentifier ?? "").lowercased()
-        let bare = bundleId.split(separator: ".").last.map(String.init) ?? bundleId
-        return name == query || bundleId == query || bare == query
+        isExactMatch(ApplicationCandidate(
+            name: app.localizedName,
+            bundleId: app.bundleIdentifier,
+            regular: app.activationPolicy == .regular
+        ), query)
     }
 
     /// Whether two applications are equally good answers to one query.
@@ -384,28 +454,28 @@ final class MacHost: PlatformHost, @unchecked Sendable {
             return [app]
         }
         if let query, !query.isEmpty {
-            let candidates = NSWorkspace.shared.runningApplications.filter { app in
-                if !includeBackground, app.activationPolicy == .prohibited { return false }
-                let name = (app.localizedName ?? "").lowercased()
-                let bundleId = (app.bundleIdentifier ?? "").lowercased()
-                return name.contains(query) || bundleId.contains(query)
-            }
-            // Prefer an exact name or bundle-id match, then an app that owns a
-            // window, then declaration order: that ordering is what makes an
-            // ambiguous query land on the app the user is thinking of.
-            let ranked = candidates.sorted { left, right in
-                let leftExact = Self.isExactMatch(left, query)
-                let rightExact = Self.isExactMatch(right, query)
-                if leftExact != rightExact { return leftExact }
-                let leftPolicy = left.activationPolicy == .regular
-                let rightPolicy = right.activationPolicy == .regular
-                if leftPolicy != rightPolicy { return leftPolicy }
-                return (left.localizedName ?? "") < (right.localizedName ?? "")
-            }
+            // Rank through the pure function, so the ordering rule is testable
+            // and the `includeBackground` filter and the ranking cannot disagree
+            // about what a candidate is.
+            let judged: [(app: NSRunningApplication, rank: ApplicationMatch)] =
+                NSWorkspace.shared.runningApplications.compactMap { app in
+                    let candidate = ApplicationCandidate(
+                        name: app.localizedName,
+                        bundleId: app.bundleIdentifier,
+                        regular: app.activationPolicy == .regular
+                    )
+                    if !includeBackground, app.activationPolicy == .prohibited { return nil }
+                    guard let rank = Self.matchRank(candidate, query: query) else { return nil }
+                    return (app, rank)
+                }
+            let ranked = judged.sorted { $0.rank < $1.rank }
             guard let best = ranked.first else {
                 throw CuaError.notFound("no running application matches \"\(query)\"")
             }
-            return ranked.filter { Self.sameRank($0, best, query: query) }
+            // Every application that ties with the best is returned, so a
+            // genuinely ambiguous query stays ambiguous instead of being
+            // resolved by the window server's listing order.
+            return ranked.filter { $0.rank.ties(with: best.rank) }.map(\.app)
         }
         guard let app = NSWorkspace.shared.frontmostApplication else {
             throw CuaError.notFound("no frontmost application")

@@ -20,11 +20,13 @@ import { Config, type Config as CuaConfig, type WriteApprovalMode } from './conf
 import { observationTools } from './tools-observe.ts'
 import { interactionTools } from './tools-interact.ts'
 import { applicationTools } from './tools-app.ts'
+import { registerComputerUse, PROVIDER_NAME } from './computer-use.ts'
 import { type ToolContext } from './shared.ts'
 
 export { Config } from './config.ts'
 export type { Config as CuaPluginConfig, WriteApprovalMode } from './config.ts'
 export { EngineClient, EngineError } from './engine-client.ts'
+export { registerComputerUse, PROVIDER_NAME } from './computer-use.ts'
 
 
 /** Cordis identity for the Computer Use plugin. */
@@ -143,8 +145,14 @@ export function apply(ctx: Context, config: CuaConfig = {}): void {
   for (const tool of interactionTools(ctx, tools, mode)) ctx.tools.register(tool)
   for (const tool of applicationTools(ctx, tools, mode)) ctx.tools.register(tool)
 
+  // Claim the harness's computer-use slot when that capability is mounted. The
+  // tools are already registered at this point, matching the built-in
+  // providers, which reserve the slot only once their catalog is ready.
+  const claimed = registerComputerUse(ctx)
+
   ctx.logger.info(
-    `dsh-plugin-cua ready: engine ${enginePath}, write approval "${mode}"`,
+    `dsh-plugin-cua ready: engine ${enginePath}, write approval "${mode}"`
+      + (claimed ? `, computer use provider "${PROVIDER_NAME}"` : ', no computer-use service mounted'),
   )
 }
 

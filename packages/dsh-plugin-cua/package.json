@@ -29,6 +29,7 @@
     "check:schemas": "node scripts/check-schemas.mjs",
     "check:mcp-catalog": "node scripts/check-mcp-catalog.mjs",
     "check:capture-deadline": "node scripts/check-capture-deadline.mjs",
+    "test:swift": "node scripts/test-swift.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:writes": "node scripts/smoke.mjs --write"
   },

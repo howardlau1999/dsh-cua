@@ -5,6 +5,8 @@
  * first: types, then the schemas the harness will validate against, then the
  * real engine.
  *
+ * 0. `swift test` — the engine's pure decision logic: coordinate conversion,
+ *    region clipping, and application ranking. No permissions, no desktop.
  * 1. `tsc --noEmit` — the plugin's own types.
  * 2. `check-schemas` — every tool's parameter and output schema, validated with
  *    the harness's own validator.
@@ -27,6 +29,7 @@ import { fileURLToPath } from 'node:url'
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 
 const STAGES = [
+  ['engine unit tests', process.execPath, [join(packageRoot, 'scripts', 'test-swift.mjs')]],
   ['types', process.execPath, [join(packageRoot, 'scripts', 'typecheck.mjs')]],
   ['tool schemas', process.execPath, [join(packageRoot, 'scripts', 'check-schemas.mjs')]],
   ['engine MCP catalog', process.execPath, [join(packageRoot, 'scripts', 'check-mcp-catalog.mjs')]],

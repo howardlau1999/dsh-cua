@@ -268,14 +268,14 @@ enum Capture {
     /// fail with an opaque `-3811` rather than capturing the overlap. This is the
     /// normal case for a whole-desktop capture, whose bounding box spans the
     /// gaps between displays.
-    private static func clip(_ region: CGRect, to frame: CGRect) -> CGRect {
+    static func clip(_ region: CGRect, to frame: CGRect) -> CGRect {
         let clipped = region.intersection(frame)
         guard !clipped.isNull, clipped.width >= 1, clipped.height >= 1 else { return frame }
         return clipped
     }
 
     /// Express a global rectangle in the local space of a container frame.
-    private static func localRect(_ region: CGRect, in container: CGRect) -> CGRect {
+    static func localRect(_ region: CGRect, in container: CGRect) -> CGRect {
         CGRect(
             x: region.origin.x - container.origin.x,
             y: region.origin.y - container.origin.y,

@@ -13,7 +13,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -75,4 +75,22 @@ rmSync(outputDir, { recursive: true, force: true })
 mkdirSync(outputDir, { recursive: true })
 copyFileSync(built, outputPath)
 const size = statSync(outputPath).size
+
+// The installed binary must be the one just built. SwiftPM's incremental build
+// was observed reporting "Build complete!" without recompiling after a source
+// edit, which left the installed engine running an older revision — a stale
+// engine that answers every check, so nothing downstream can notice. Comparing
+// the two files costs a read and turns the whole class of problem into a hard
+// failure here.
+const builtSize = statSync(built).size
+const builtBytes = readFileSync(built)
+const installedBytes = readFileSync(outputPath)
+if (builtSize !== size || !builtBytes.equals(installedBytes)) {
+  process.stderr.write(
+    `cua-engine: ${outputPath} does not match the binary SwiftPM just built at ${built}.\n`
+      + 'Re-run the build; if it happens again, `swift package clean` in native/cua-engine.\n',
+  )
+  process.exit(1)
+}
+
 process.stdout.write(`cua-engine: wrote ${outputPath} (${(size / 1024 / 1024).toFixed(1)} MiB)\n`)
