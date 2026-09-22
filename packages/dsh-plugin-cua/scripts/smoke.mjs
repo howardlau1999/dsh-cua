@@ -17,16 +17,33 @@
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const allowWrites = process.argv.includes('--write')
+
+/** Which backend this host builds and drives. */
+const WINDOWS = process.platform === 'win32'
+/** The other backend, for the handful of checks whose reason is macOS-only. */
+const MACOS = process.platform === 'darwin'
+/**
+ * The permission the tree and input tools are gated by, as it appears in an
+ * error message. Windows has no such grant, so the gate does not exist there and
+ * the checks that assert on it are skipped rather than reworded.
+ */
+const ACCESS_PERMISSION = WINDOWS ? '' : 'Accessibility'
+/** What a multi-line text control calls itself in the accessibility tree. */
+const TEXT_ROLES = WINDOWS ? ['Document', 'Edit'] : ['AXTextArea', 'AXTextField']
+/** A write target the smoke test is allowed to open and close. */
+const SCRATCH_APP = WINDOWS
+  ? { id: 'notepad.exe', name: 'notepad' }
+  : { id: 'com.apple.TextEdit', name: 'textedit' }
 
 // The runtime validates every canonical value against the tool's declared
 // output schema before it reaches the model, so the smoke test does the same:
 // a value the schema rejects is a tool that fails in production but not here.
 const { validateJsonSchemaValue } = await import(
-  createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools')
+  pathToFileURL(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools')).href
 )
 
 const failures = []
@@ -123,7 +140,7 @@ if (!existsSync(entry)) {
   process.exit(1)
 }
 
-const plugin = await import(entry)
+const plugin = await import(pathToFileURL(entry).href)
 check(typeof plugin.name === 'string' && plugin.name.length > 0, 'plugin exports a name', plugin.name)
 check(typeof plugin.apply === 'function', 'plugin exports apply()')
 check(Array.isArray(plugin.inject), 'plugin declares injected services', JSON.stringify(plugin.inject))
@@ -131,9 +148,12 @@ check(plugin.Config !== undefined, 'plugin exports a Config schema')
 
 // The harness validates configuration through the exported schema; run the
 // defaults through it so a schema that rejects its own defaults fails here.
-const config = plugin.Config({ enginePath: join(packageRoot, 'lib', 'bin', 'cua-engine') })
+// No `enginePath`: the plugin resolves the engine from the package layout, so the
+// smoke test exercises that resolution rather than routing around it.
+const config = plugin.Config({})
 check(config.writeApproval === 'always', 'default writeApproval is "always"', String(config.writeApproval))
 check(config.maxCaptureDimension === 1568, 'default capture budget is 1568', String(config.maxCaptureDimension))
+check(config.allowedScript === false, 'shell scripting is off unless asked for', String(config.allowedScript))
 
 const ctx = fakeContext()
 plugin.apply(ctx, config)
@@ -213,10 +233,32 @@ const { value: apps } = await callTool(definitions, 'cua_apps', {})
 check(apps.count > 0, 'cua_apps lists running applications', `${String(apps.count)} found`)
 check(apps.apps.every(app => typeof app.name === 'string' && typeof app.bundleId === 'string'), 'cua_apps rows are well formed')
 
+// One row per application, not per process. A browser or an Electron app is
+// many processes, and listing each one makes the same application appear several
+// times under the same name — rows a model can neither tell apart nor act on.
+// Checked on the two identities a caller can see: an application id must not
+// repeat, and nor must a pid (a pid can only be one row's primary).
+const appIds = apps.apps.map(app => app.bundleId).filter(id => id !== '')
+check(
+  new Set(appIds).size === appIds.length,
+  'cua_apps reports each application once by id',
+  `${String(appIds.length - new Set(appIds).size)} duplicate id(s)`,
+)
+const livePids = apps.apps.map(app => app.pid).filter(pid => pid > 0)
+check(
+  new Set(livePids).size === livePids.length,
+  'cua_apps does not give two applications the same pid',
+  `${String(livePids.length - new Set(livePids).size)} duplicate pid(s)`,
+)
+
 const frontmost = apps.apps.find(app => app.active)
 if (frontmost !== undefined) {
   process.stdout.write(`  (frontmost application: ${frontmost.name})\n`)
 }
+
+// Whether the dumped tree has anything indexable. Declared out here because the
+// cross-call index check below it needs the same answer.
+let addressable = false
 
 if (status.accessibility) {
   const { value: windows } = await callTool(definitions, 'cua_windows', {})
@@ -226,32 +268,78 @@ if (status.accessibility) {
   check(tree.nodeCount > 0, 'cua_tree returns nodes', `${String(tree.nodeCount)} nodes`)
   check(typeof tree.outline === 'string', 'cua_tree renders an outline')
   check(tree.pid > 0, 'cua_tree reports the pid it read', String(tree.pid))
-
-  // Index 0 is the application element itself; index 1 is the first real node.
-  // Both the snapshot lookup and this pair of calls depend on `element: 0`
-  // being treated as a supplied value rather than as "absent".
-  const { value: pressed } = await callTool(definitions, 'cua_element', { element: 1, action: 'list' })
+  // The root has to survive the fold: it is the only thing that says what the
+  // outline below it describes, and on Windows a top-level window can report a
+  // layout control type that the folder would otherwise swallow.
   check(
-    pressed.performed === true && Array.isArray(pressed.attributes),
-    'cua_element list reports actions and attributes',
-    `${String(pressed.actions?.length ?? 0)} actions`,
+    tree.nodes[0]?.depth === 0 && tree.outline.startsWith('[0]'),
+    'cua_tree anchors the outline at the requested root',
+    tree.outline.split('\n')[0] ?? '',
   )
-  let rootRefused = false
-  try {
-    await callTool(definitions, 'cua_element', { element: 0, action: 'list' })
-  } catch (error) {
-    rootRefused = /element 0 is the application itself/u.test(String(error.message))
+
+  // A tree that is nothing but its root is a real answer, not a failure: Windows
+  // withholds the contents of an elevated window from this engine, and an
+  // application genuinely can have no controls. Either way the engine has to say
+  // so, because a bare root is otherwise indistinguishable from an application
+  // with no UI. When that happens the index-based checks below have nothing to
+  // address, so they are skipped rather than left to throw.
+  addressable = tree.nodeCount > 1
+  if (addressable) {
+    // Index 0 is the application element on macOS and the root window on Windows,
+    // so only macOS refuses it; the pair of calls below depends on `element: 0`
+    // being treated as a supplied value rather than as "absent" on both.
+    const { value: pressed } = await callTool(definitions, 'cua_element', { element: 1, action: 'list' })
+    check(
+      pressed.performed === true && Array.isArray(pressed.attributes),
+      'cua_element list reports actions and attributes',
+      `${String(pressed.actions?.length ?? 0)} actions`,
+    )
+  } else {
+    process.stdout.write(
+      `  (the tree is a bare root — ${String(tree.nodeCount)} node — so the index checks are skipped)\n`,
+    )
+    check(
+      typeof tree.note === 'string' && tree.note.length > 0,
+      'a bare-root tree explains itself instead of looking empty',
+      tree.note ?? '(no note)',
+    )
   }
-  check(rootRefused, 'element index 0 is refused with an explanation')
+  if (addressable && WINDOWS) {
+    const { value: rootListed } = await callTool(definitions, 'cua_element', { element: 0, action: 'list' })
+    check(
+      rootListed.performed === true && Array.isArray(rootListed.attributes),
+      'element index 0 addresses the root window',
+      `${String(rootListed.actions?.length ?? 0)} actions`,
+    )
+  } else if (addressable) {
+    let rootRefused = false
+    try {
+      await callTool(definitions, 'cua_element', { element: 0, action: 'list' })
+    } catch (error) {
+      rootRefused = /element 0 is the application itself/u.test(String(error.message))
+    }
+    check(rootRefused, 'element index 0 is refused with an explanation')
+  }
 
   // A role filter must actually narrow the tree, and must be asserted on an
   // application that has something to narrow: a filter returning nothing is
   // correct for an app with no buttons, so asserting on whatever happens to be
   // frontmost would be flaky in both directions.
-  const filterRoles = new Set(['AXButton', 'AXTextField', 'AXTextArea', 'AXLink', 'AXCheckBox', 'AXPopUpButton'])
-  const structural = new Set(['AXGroup', 'AXWindow', 'AXSheet', 'AXDialog', 'AXUnknown', 'AXSplitGroup',
-    'AXScrollArea', 'AXList', 'AXTable', 'AXRow', 'AXOutline', 'AXBrowser', 'AXColumn', 'AXGrid',
-    'AXSection', 'AXLayoutArea', 'AXLayoutItem', 'AXLandmarkRegion', 'AXLandmarkGroup'])
+  //
+  // The two sets are the platform's own role vocabulary, because that is what a
+  // tree reports: macOS names, or the UI Automation control types Windows uses.
+  // Windows keeps an element that carries text even when its role is not in the
+  // filter, so the text-bearing roles belong in `structural` there — the filter
+  // widens rather than restricts, on both backends.
+  const filterRoles = WINDOWS
+    ? new Set(['Button', 'Edit', 'Hyperlink', 'CheckBox', 'ComboBox', 'RadioButton'])
+    : new Set(['AXButton', 'AXTextField', 'AXTextArea', 'AXLink', 'AXCheckBox', 'AXPopUpButton'])
+  const structural = WINDOWS
+    ? new Set(['Pane', 'Group', 'TitleBar', 'List', 'Table', 'Tree', 'DataGrid', 'Separator',
+      'Window', 'Dialog', 'Text', 'Tab', 'TabItem', 'Image', 'ToolBar', 'StatusBar', 'MenuBar', 'MenuItem'])
+    : new Set(['AXGroup', 'AXWindow', 'AXSheet', 'AXDialog', 'AXUnknown', 'AXSplitGroup',
+      'AXScrollArea', 'AXList', 'AXTable', 'AXRow', 'AXOutline', 'AXBrowser', 'AXColumn', 'AXGrid',
+      'AXSection', 'AXLayoutArea', 'AXLayoutItem', 'AXLandmarkRegion', 'AXLandmarkGroup', 'AXStaticText'])
   let filtered = undefined
   for (const candidate of apps.apps.slice(0, 8)) {
     const attempt = await callTool(definitions, 'cua_tree', { pid: candidate.pid, roles: [...filterRoles], maxDepth: 12 })
@@ -263,10 +351,22 @@ if (status.accessibility) {
   if (filtered === undefined) {
     process.stdout.write('  (no probed application exposes a filterable control; skipping role-filter checks)\n')
   } else {
+    // `roles` widens rather than restricts, and the assertion says so. The
+    // engine — both backends; this is `shouldEmit` in the macOS `Tree.swift` —
+    // keeps a matching role, a structural anchor, **or anything carrying text**,
+    // because a match with no surroundings cannot be read. So the set of roles
+    // that may appear is open, and a check demanding "only the requested roles"
+    // can never hold: `Document`, `TreeItem`, and `ListItem` all carry text.
+    //
+    // What can still regress, and is what this asserts, is an element that
+    // neither matched, nor anchors, nor says anything: that has no business in
+    // the output and would mean the filter was being ignored outright.
+    const saysSomething = node =>
+      (node.title ?? '') !== '' || (node.value ?? '') !== '' || (node.description ?? '') !== ''
     const roles = filtered.nodes.map(node => node.role)
     check(
-      roles.every(role => filterRoles.has(role) || structural.has(role)),
-      'cua_tree roles= emits only matching roles plus structural anchors',
+      filtered.nodes.every(node => filterRoles.has(node.role) || structural.has(node.role) || saysSomething(node)),
+      'cua_tree roles= emits matches, anchors, and text-bearing elements only',
       `roles present: ${[...new Set(roles)].join(',')}`,
     )
     check(
@@ -303,7 +403,7 @@ if (status.screenRecording && !status.sessionLocked) {
   await captureChecks()
 } else if (status.sessionLocked) {
   // A locked console fails every capture; the tool must say so rather than
-  // relaying ScreenCaptureKit's opaque stream error.
+  // relaying a capture backend's opaque error.
   process.stdout.write('  (the screen is locked; asserting the locked-session error instead of capturing)\n')
   let reported = false
   try {
@@ -311,7 +411,7 @@ if (status.screenRecording && !status.sessionLocked) {
   } catch (error) {
     reported = /screen is locked/u.test(String(error.message))
   }
-  check(reported, 'cua_screenshot names the locked session instead of a stream error')
+  check(reported, 'cua_screenshot names the locked session instead of a backend error')
   check(status.ready === false, 'cua_status reports not-ready while the screen is locked')
 } else {
   process.stdout.write('  (Screen Recording is not granted; skipping capture checks)\n')
@@ -341,7 +441,11 @@ if (status.screenRecording && !status.sessionLocked) {
  * script is itself launched from inside the host.
  */
 async function captureChecks() {
-  if (process.env.DSH_CUA_CAPTURE !== '1') {
+  // The gate is a macOS problem: an engine started from a terminal has no Screen
+  // Recording attribution, so its first capture call never returns. Windows
+  // grants capture to every process, so there is nothing to wait for and the
+  // checks run unconditionally there.
+  if (MACOS && process.env.DSH_CUA_CAPTURE !== '1') {
     process.stdout.write(
       '  (capture checks need the host process tree: an engine started from a terminal has no\n'
       + '   Screen Recording attribution, so its first capture call never returns. Set\n'
@@ -386,11 +490,21 @@ async function captureChecks() {
   const windowsForOwner = await callTool(definitions, 'cua_windows', { includeUntitled: true })
   const owner = windowsForOwner.value.windows.find(window => window.windowId === front.windowId)
   if (owner !== undefined) {
-    check(
-      front.app === owner.app,
-      'a window capture names the application that owns the window',
-      `reported "${String(front.app)}" for window ${String(front.windowId)} owned by "${String(owner.app)}"`,
-    )
+    if (front.app === undefined) {
+      // Only the Windows engine reports the owning application so far, and the
+      // macOS engine cannot be exercised here. Say so rather than either failing
+      // the build on a platform that never had the field or passing silently.
+      process.stdout.write(
+        '  (the capture result carries no "app", so the owning application cannot be checked;\n'
+        + '   the Windows engine reports it, the macOS engine does not yet)\n',
+      )
+    } else {
+      check(
+        front.app === owner.app,
+        'a window capture names the application that owns the window',
+        `reported "${String(front.app)}" for window ${String(front.windowId)} owned by "${String(owner.app)}"`,
+      )
+    }
   }
 
   // A rectangle that only partly overlaps a display, and one spanning the gap
@@ -435,7 +549,7 @@ async function captureChecks() {
 
 // The engine outlives one tool call, so an index from one call must address the
 // same element in the next: that is what makes cua_tree -> cua_element a pair.
-if (status.accessibility) {
+if (status.accessibility && addressable) {
   const { value: tree } = await callTool(definitions, 'cua_tree', { maxDepth: 3, nodeLimit: 10 })
   const { value: listed } = await callTool(definitions, 'cua_element', { element: 1, action: 'list' })
   check(tree.nodeCount > 1 ? Array.isArray(listed.actions) : true, 'an element index survives across tool calls')
@@ -447,6 +561,11 @@ if (status.accessibility) {
 // it is the one place where the obvious mechanism (synthesized input aimed at
 // whatever is frontmost) silently does nothing. It runs with --write only,
 // because proving it means really typing into a real application.
+//
+// How much of it is provable differs by platform, and the checks say which:
+// macOS delivers keystrokes to a named process, so the whole guarantee holds;
+// Windows has no per-process key delivery, so only the element action is a true
+// background operation there.
 if (allowWrites && status.accessibility) {
   process.stdout.write('\nbackground operation (--write)\n')
   const writeCtx = fakeContext()
@@ -461,43 +580,90 @@ if (allowWrites && status.accessibility) {
     return value.apps.filter(app => app.active).map(app => app.name)
   }
 
-  await callTool(writeTools, 'cua_app', { action: 'launch', bundleId: 'com.apple.TextEdit' })
-  await new Promise(resolve => setTimeout(resolve, 2000))
-  // Hand the foreground to something else so TextEdit is genuinely in the
-  // background for the rest of this block.
-  const before = await frontmostName()
-  const other = apps.apps.find(app => app.active && app.bundleId !== 'com.apple.TextEdit')
-  if (other !== undefined) {
-    await callTool(writeTools, 'cua_app', { action: 'activate', app: other.bundleId })
-    await new Promise(resolve => setTimeout(resolve, 1200))
+  // Handing the foreground around is best effort, and it is the one place this
+  // block still names an application rather than a pid. A state-changing action
+  // refuses an ambiguous name — which is right, since picking one of two running
+  // instances is a guess — so a machine that happens to have two of the same
+  // application open would otherwise turn this into a flaky failure. The reason
+  // is printed rather than swallowed.
+  const tryActivate = async app => {
+    try {
+      await callTool(writeTools, 'cua_app', { action: 'activate', app })
+    } catch (error) {
+      process.stdout.write(`  (could not activate ${String(app)}: ${String(error.message).slice(0, 120)})\n`)
+    }
   }
 
-  const tree = await callTool(writeTools, 'cua_tree', { app: 'textedit', interactiveOnly: true })
-  const field = tree.value.nodes.findIndex(node => node.role === 'AXTextArea')
-  check(field > 0, 'the background window is still readable through cua_tree', `index ${String(field)}`)
+  const originalFrontmost = (await frontmostName())[0]
+  const launched = await callTool(writeTools, 'cua_app', { action: 'launch', bundleId: SCRATCH_APP.id })
+  await new Promise(resolve => setTimeout(resolve, 2500))
 
-  if (field > 0) {
-    const marker = `bg-${Date.now().toString(36)}`
-    await callTool(writeTools, 'cua_element', { element: field, action: 'setValue', text: marker })
-    const reread = await callTool(writeTools, 'cua_tree', { app: 'textedit' })
-    const got = reread.value.nodes.filter(node => (node.value ?? '').includes(marker))
-    check(got.length > 0, 'cua_element writes into a BACKGROUND application', JSON.stringify(got.map(node => node.value)))
-
-    const typed = `+${marker}`
-    await callTool(writeTools, 'cua_type', { element: field, text: typed })
-    const reread2 = await callTool(writeTools, 'cua_tree', { app: 'textedit' })
-    const got2 = reread2.value.nodes.some(node => (node.value ?? '').includes(typed))
-    check(got2, 'cua_type with element= types into a BACKGROUND application')
-
-    const after = await frontmostName()
-    check(
-      after.join(',') === before.join(',') || after.join(',') === (other === undefined ? before.join(',') : [other.name].join(',')),
-      'background work did not steal focus',
-      `before ${before.join(',')} / after ${after.join(',')}`,
+  // Everything below addresses the scratch application by the pid the launch
+  // returned, never by name. A name is resolved against every running
+  // application, so on a machine where the user happens to have the same
+  // application open it selects theirs — and this block ends by killing what it
+  // selected. `launch` only ever reports a pid that did not exist before the
+  // call, so a pid cannot belong to a window the user already had; if it reports
+  // none, the block is skipped rather than falling back to a name.
+  const scratchPid = launched.value.pid
+  // Declared out here because the foreground is restored after the block, on
+  // both paths.
+  let other
+  if (typeof scratchPid !== 'number' || scratchPid <= 0) {
+    process.stdout.write(
+      '  (the scratch application could not be identified by pid — it may have been\n'
+      + '   reused by an instance that was already running — so nothing was written to it)\n',
     )
-  }
+  } else {
+    // Hand the foreground to something else so the scratch app is genuinely in
+    // the background for the rest of this block.
+    const before = await frontmostName()
+    other = apps.apps.find(app => app.active && app.name !== SCRATCH_APP.name)
+    if (other !== undefined) {
+      await tryActivate(other.bundleId)
+      await new Promise(resolve => setTimeout(resolve, 1200))
+    }
 
-  await callTool(writeTools, 'cua_app', { action: 'script', bundleId: 'com.apple.TextEdit', script: 'quit saving no' })
+    const tree = await callTool(writeTools, 'cua_tree', { pid: scratchPid, interactiveOnly: true })
+    const field = tree.value.nodes.findIndex(node => TEXT_ROLES.includes(node.role))
+    check(field >= 0, 'the target window is readable through cua_tree', `index ${String(field)}`)
+
+    if (field >= 0) {
+      const marker = `bg-${Date.now().toString(36)}`
+      await callTool(writeTools, 'cua_element', { element: field, action: 'setValue', text: marker, pid: scratchPid })
+      const reread = await callTool(writeTools, 'cua_tree', { pid: scratchPid })
+      const got = reread.value.nodes.filter(node => (node.value ?? '').includes(marker))
+      check(got.length > 0, 'cua_element writes into a BACKGROUND application', JSON.stringify(got.map(node => node.value)))
+
+      if (WINDOWS) {
+        process.stdout.write(
+          '  (cua_type needs the target frontmost on Windows, so the background-typing and\n'
+          + '   focus-preservation guarantees are asserted on macOS only)\n',
+        )
+      } else {
+        const typed = `+${marker}`
+        await callTool(writeTools, 'cua_type', { element: field, text: typed, pid: scratchPid })
+        const reread2 = await callTool(writeTools, 'cua_tree', { pid: scratchPid })
+        const got2 = reread2.value.nodes.some(node => (node.value ?? '').includes(typed))
+        check(got2, 'cua_type with element= types into a BACKGROUND application')
+
+        const after = await frontmostName()
+        check(
+          after.join(',') === before.join(',') || after.join(',') === (other === undefined ? before.join(',') : [other.name].join(',')),
+          'background work did not steal focus',
+          `before ${before.join(',')} / after ${after.join(',')}`,
+        )
+      }
+    }
+
+    // Leave the machine as it was found: close the process this block started,
+    // identified by the pid it was given rather than by a name that might match
+    // something the user is using.
+    await callTool(writeTools, 'cua_app', { action: 'quit', pid: scratchPid, force: true })
+  }
+  if (other === undefined && originalFrontmost !== undefined) {
+    await tryActivate(originalFrontmost)
+  }
 }
 
 // ---------------------------------------------------------------- write gate
@@ -595,13 +761,23 @@ if (allowWrites && status.accessibility) {
     const { value } = await callTool(writeDefinitions, 'cua_key', { key: alias })
     check(value.delivered === true, `cua_key resolves the alias "${alias}"`, String(value.reason ?? ''))
   }
-  let unknownRejected = false
+  // An unknown key must be refused and named. Assert the substance rather than
+  // the transport: both backends report it as `delivered: false` with a reason
+  // (macOS says `unknown key "x"`, Windows explains what it does know) instead of
+  // raising, which is the same shape `cua_click` and `cua_type` use for a
+  // delivery that could not happen. What must never happen is a silent success.
+  let unknownRefused = false
+  let unknownDetail = ''
   try {
-    await callTool(writeDefinitions, 'cua_key', { key: 'definitely-not-a-key' })
+    const { value } = await callTool(writeDefinitions, 'cua_key', { key: 'definitely-not-a-key' })
+    unknownDetail = `delivered=${String(value.delivered)} reason=${String(value.reason ?? '')}`
+    unknownRefused = value.delivered === false
+      && /unknown key|not a key/u.test(String(value.reason ?? ''))
   } catch (error) {
-    unknownRejected = /unknown key/u.test(String(error.message))
+    unknownDetail = String(error.message)
+    unknownRefused = /unknown key|not a key/u.test(unknownDetail)
   }
-  check(unknownRejected, 'cua_key rejects an unknown key name')
+  check(unknownRefused, 'cua_key refuses an unknown key name', unknownDetail.slice(0, 160))
 }
 
 // ------------------------------------------------------------------- summary

@@ -14,11 +14,12 @@ import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { requireWriteApproval } from './approval.ts'
 import type { WriteApprovalMode } from './config.ts'
 import { arr, bool, num, str, text, type ToolContext } from './shared.ts'
+import { copy } from './platform.ts'
 
 /** Coordinates and target shared by every pointer tool. */
 const POINT_PARAMETERS = {
-  x: { type: 'number', description: 'Horizontal position in top-left-origin screen points, as reported by cua_windows frames or cua_tree geometry.' },
-  y: { type: 'number', description: 'Vertical position in top-left-origin screen points.' },
+  x: { type: 'number', description: 'Horizontal position in top-left-origin screen coordinates, as reported by cua_windows frames or cua_tree geometry.' },
+  y: { type: 'number', description: 'Vertical position in top-left-origin screen coordinates.' },
   element: { type: 'integer', description: 'Target a cua_tree index instead of coordinates. The element snapshot must come from the most recent cua_tree call.' },
 } as const
 
@@ -37,10 +38,10 @@ function clickTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode): T
   return defineTool({
     name: 'cua_click',
     description: 'Move the pointer and click, drag, or scroll on the real desktop. '
-      + 'Coordinates are top-left-origin screen points: the same space as cua_windows frames and cua_tree geometry, and the space cua_screenshot converts image pixels into. '
+      + 'Coordinates are top-left-origin screen coordinates: the same space as cua_windows frames and cua_tree geometry, and the space cua_screenshot converts image pixels into. '
       + 'Prefer targeting an `element` index from cua_tree over raw coordinates — it survives layout changes and the result tells you what was actually hit. '
-      + 'With route "post" (the default) the events go through the window server exactly like a physical mouse, which moves the visible cursor and reaches whatever is frontmost; with route "pid" they go straight to one process, leaving the cursor alone and reaching a background window. '
-      + 'Requires Accessibility permission.',
+      + `Delivery: ${copy.routeHelp} `
+      + copy.treePermission,
     parameters: {
       action: { type: 'string', enum: ['click', 'move', 'scroll', 'drag', 'down', 'up'], description: 'Pointer action (default click).' },
       ...POINT_PARAMETERS,
@@ -178,11 +179,11 @@ function typeTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode): To
   return defineTool({
     name: 'cua_type',
     description: 'Type text as keyboard input. '
-      + 'Pass `element` (a cua_tree index) whenever you know the field: the engine focuses it and delivers the keystrokes straight to that application, which is the only way to type into a BACKGROUND window the user is not looking at. '
+      + `Pass \`element\` (a cua_tree index) whenever you know the field: ${copy.backgroundTyping}. `
       + 'Without `element` the text goes to whatever currently has keyboard focus on the frontmost application, and a background application silently ignores it. '
       + 'Unicode is delivered through the event payload rather than by key mapping, so CJK, emoji, and accented text work on any keyboard layout. '
-      + 'For shortcuts use cua_key instead — typing "cmd+s" here would enter those characters literally. '
-      + 'Requires Accessibility permission.',
+      + 'For shortcuts use cua_key instead — typing the characters of a shortcut here would enter them literally. '
+      + copy.treePermission,
     parameters: {
       text: { type: 'string', required: true, description: 'The text to type.' },
       element: { type: 'integer', description: 'A cua_tree index to focus and type into. Strongly preferred: it makes the target explicit and works on a background window.' },
@@ -254,9 +255,9 @@ function keyTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode): Too
     name: 'cua_key',
     description: 'Press a named key or a chord such as cmd+s, cmd+shift+t, or ctrl+c. '
       + 'The key name identifies a physical key position, so the shortcut is the same on every keyboard layout. '
-      + 'Key names: letters and digits as written, plus return, tab, space, delete (or del), escape, arrows (down/up/left/right, or downarrow/uparrow/leftarrow/rightarrow), home, end, pageup/pgup, pagedown/pgdn, keypad_enter, keypad_plus, keypad_minus, keypad_0–9, f1–f20, and the modifiers themselves (cmd, shift, alt/option, ctrl, fn). '
-      + 'Modifiers: cmd, shift, alt (option), ctrl, fn. '
-      + 'Requires Accessibility permission.',
+      + 'Key names: letters and digits as written, plus return, tab, space, delete (or del), escape, arrows (down/up/left/right, or downarrow/uparrow/leftarrow/rightarrow), home, end, pageup/pgup, pagedown/pgdn, keypad_enter, keypad_plus, keypad_minus, keypad_0–9, f1–f20, and the modifiers themselves. '
+      + `Modifiers: ${copy.modifiers}. `
+      + copy.treePermission,
     parameters: {
       key: { type: 'string', required: true, description: 'Key name, such as "s", "return", "left", "f5", or a modifier on its own ("shift", "cmd") to press just that key.' },
       modifiers: { type: 'array', items: { type: 'string' }, description: 'Modifiers held while the key is pressed, such as ["cmd","shift"].' },
@@ -321,10 +322,10 @@ function elementTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode):
   return defineTool({
     name: 'cua_element',
     description: 'Act on one element from the most recent cua_tree by asking the application to perform the action itself, rather than synthesizing a click. '
-      + 'This is the most reliable way to press a button, choose a menu item, focus a field, or write a text value: it works on a BACKGROUND window the user is not looking at, needs no coordinates, and cannot miss because a window moved. '
+      + 'This is the most reliable way to press a button, choose a menu item, focus a field, or write a text value: it needs no coordinates and cannot miss because a window moved. '
       + 'It also does not steal focus from whatever the user is doing. Prefer it over cua_click for anything with an accessibility surface. '
-      + 'Actions: press (AXPress, falling back to a click at the element center), setValue (replace a text field\'s contents), focus, scrollToVisible, menu (walk a menu path such as ["File","Export","PDF"]), list (report the element\'s available actions and attributes without changing anything). '
-      + 'Requires Accessibility permission.',
+      + `Actions: ${copy.pressHelp}, setValue (replace a text field\'s contents), focus, scrollToVisible, menu (walk a menu path such as ["File","Export","PDF"]), list (report the element\'s available actions and attributes without changing anything). `
+      + copy.treePermission,
     parameters: {
       element: { type: 'integer', required: true, description: 'Index from the most recent cua_tree dump.' },
       action: { type: 'string', enum: ['press', 'setValue', 'focus', 'scrollToVisible', 'menu', 'list'], description: 'What to do with the element (default press).' },

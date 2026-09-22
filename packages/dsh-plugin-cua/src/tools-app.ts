@@ -15,6 +15,7 @@ import { defineTool, type ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { requireWriteApproval } from './approval.ts'
 import type { WriteApprovalMode } from './config.ts'
 import { arr, bool, num, str, text, type ToolContext } from './shared.ts'
+import { copy } from './platform.ts'
 
 /** Write-capable application actions; the rest are plain reads. */
 const WRITE_ACTIONS: readonly string[] = ['activate', 'focus', 'hide', 'unhide', 'quit', 'launch', 'openURL', 'reveal', 'script', 'menu']
@@ -29,19 +30,21 @@ function appTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode): Too
   return defineTool({
     name: 'cua_app',
     description: 'Control one application directly instead of through the pointer and keyboard. '
-      + 'Actions: activate (bring the app and one window to the front), hide, unhide, quit, launch (start an installed app by bundle id), openURL (hand a URL to an app or the default handler), reveal (show a path in Finder), '
-      + 'menu (invoke a menu path such as ["File","Save"] without touching the mouse), and script (send the application an Apple event — the app performs the work itself, which is the most reliable way to drive a scriptable app). '
-      + 'menu and activate need Accessibility permission. script additionally needs the Automation permission, which macOS asks for on first use; if it is refused the result says so. '
+      + 'Actions: activate (bring the app and one window to the front), hide, unhide, quit, '
+      + `${copy.launchHelp}, openURL (hand a URL to an app or the default handler), ${copy.revealHelp}, `
+      + 'menu (invoke a menu path such as ["File","Save"] without touching the mouse), '
+      + `and ${copy.scriptHelp}. `
+      + `menu and activate need accessibility access; the other actions need none. `
       + 'Prefer this over synthesizing clicks whenever the app exposes the operation.',
     parameters: {
       action: { type: 'string', required: true, enum: ['activate', 'hide', 'unhide', 'quit', 'launch', 'openURL', 'reveal', 'menu', 'script'], description: 'What to do.' },
-      app: { type: 'string', description: 'Target application name or bundle id. Defaults to the frontmost application for actions that need a target.' },
+      app: { type: 'string', description: `Target application name or ${copy.appIdNoun}. Defaults to the frontmost application for actions that need a target.` },
       pid: { type: 'integer', description: 'Target process id; wins over app.' },
-      bundleId: { type: 'string', description: 'Target bundle id; used by launch, openURL, and script.' },
+      bundleId: { type: 'string', description: `Target ${copy.appIdHelp}; used by launch, openURL, and script.` },
       windowTitle: { type: 'string', description: 'With activate: bring the window whose title contains this text to the front.' },
-      path: { type: 'array', items: { type: 'string' }, description: 'For action=menu: menu titles from the menu bar inward, such as ["File","Save"]. For action=reveal: a single filesystem path.' },
+      path: { type: 'array', items: { type: 'string' }, description: `For action=menu: menu titles from the menu bar inward, such as ["File","Save"]. For action=reveal: a single filesystem path.` },
       url: { type: 'string', description: 'For action=openURL: the URL to open.' },
-      script: { type: 'string', description: 'For action=script: AppleScript source. With bundleId it runs inside a "tell application id" block, so write it from the app\'s point of view, such as "make new document".' },
+      script: { type: 'string', description: `For action=script: ${copy.scriptHelp.replace(/^script \(/, '').replace(/\)$/, '')}.` },
       timeoutSeconds: { type: 'integer', description: 'For action=script: how long the target may take (default 30).' },
       force: { type: 'boolean', description: 'For action=quit: force-kill instead of asking the app to quit.' },
     },
@@ -155,13 +158,15 @@ function describeWrite(action: string, args: {
     case 'openURL':
       return `Computer Use wants to open ${args.url ?? 'a URL'}${args.bundleId === undefined ? '' : ` in ${args.bundleId}`}.`
     case 'reveal':
-      return `Computer Use wants to reveal ${args.path?.[0] ?? 'a path'} in Finder.`
+      return `Computer Use wants to reveal ${args.path?.[0] ?? 'a path'} in ${copy.osName === 'Windows' ? 'File Explorer' : 'Finder'}.`
     case 'menu':
       return `Computer Use wants to invoke the menu path ${(args.path ?? []).join(' → ')} in ${target}.`
     case 'script': {
       const source = args.script ?? ''
       const preview = source.length > 120 ? `${source.slice(0, 120)}…` : source
-      return `Computer Use wants to send ${target} this Apple event script: ${preview}`
+      return copy.osName === 'Windows'
+        ? `Computer Use wants to run this PowerShell script on your desktop: ${preview}`
+        : `Computer Use wants to send ${target} this Apple event script: ${preview}`
     }
     default:
       return `Computer Use wants to run "${action}" on ${target}.`
@@ -233,7 +238,7 @@ function renderApp(value: {
     case 'openURL':
       return `Opened ${value.url ?? 'the URL'}.`
     case 'reveal':
-      return `Revealed ${value.path?.[0] ?? 'the path'} in Finder.`
+      return `Revealed ${value.path?.[0] ?? 'the path'} in ${copy.osName === 'Windows' ? 'File Explorer' : 'Finder'}.`
     case 'script':
       return `The application ran the script.${value.result === undefined || value.result === '' ? ' It returned no value.' : ` Result: ${value.result}`}`
     case 'menu':

@@ -16,7 +16,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const nodeModulesBin = join(packageRoot, 'node_modules', '.bin')
 
 /**
  * Packages the harness must own, because their identity is the service identity.
@@ -31,17 +30,35 @@ const EXTERNALS = [
   '@deepseek-ai/schemastery',
 ]
 
-/** Run one local binary, reporting a missing install instead of a stack trace. */
-function run(binary, args) {
-  const path = join(nodeModulesBin, binary)
-  if (!existsSync(path)) {
+/**
+ * The two local tools, by their JavaScript entry points.
+ *
+ * Driven through `node <entry>` rather than through `node_modules/.bin/<name>`:
+ * on Windows the shim there is a `.cmd` or a `.ps1`, and `spawnSync` cannot
+ * execute either without a shell. Going straight to the entry point works
+ * identically on every platform and needs no shell quoting.
+ */
+const TOOLS = {
+  tsc: join(packageRoot, 'node_modules', 'typescript', 'bin', 'tsc'),
+  esbuild: join(packageRoot, 'node_modules', 'esbuild', 'bin', 'esbuild'),
+}
+
+/** Run one local tool, reporting a missing install instead of a stack trace. */
+function run(tool, args) {
+  const entry = TOOLS[tool]
+  if (entry === undefined) throw new Error(`unknown tool ${tool}`)
+  if (!existsSync(entry)) {
     process.stderr.write(
-      `cua: ${binary} is not installed in ${nodeModulesBin}.\n`
+      `cua: ${tool} is not installed at ${entry}.\n`
       + 'Run `pnpm install` in the plugin package first.\n',
     )
     process.exit(1)
   }
-  const result = spawnSync(path, args, { cwd: packageRoot, stdio: 'inherit' })
+  const result = spawnSync(process.execPath, [entry, ...args], { cwd: packageRoot, stdio: 'inherit' })
+  if (result.error !== undefined) {
+    process.stderr.write(`cua: ${tool} could not be started: ${result.error.message}\n`)
+    process.exit(1)
+  }
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 

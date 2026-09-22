@@ -46,6 +46,15 @@ export interface Config {
    * Larger values cost model tokens; smaller values lose detail.
    */
   maxCaptureDimension?: number
+  /**
+   * Whether `cua_app` with `action: "script"` may run a shell snippet.
+   *
+   * This only affects Windows. On macOS the same action sends an Apple event,
+   * which the system scopes to a single named target application; the Windows
+   * equivalent is a PowerShell snippet with no such scope, so it stays off
+   * unless a host deliberately turns it on. Ignored on macOS.
+   */
+  allowedScript?: boolean
 }
 
 /** Runtime configuration schema for the Computer Use plugin. */
@@ -55,4 +64,5 @@ export const Config: z<Config> = z.object({
   writeApproval: z.union(['always', 'session', 'never'] as const).default('always'),
   screenshotDir: z.string(),
   maxCaptureDimension: z.natural().min(64).max(8192).default(1568),
+  allowedScript: z.boolean().default(false),
 })

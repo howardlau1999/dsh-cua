@@ -1,4 +1,4 @@
 # Build-script allowlist: esbuild ships a platform binary through its install
 # script, and pnpm blocks install scripts by default.
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true

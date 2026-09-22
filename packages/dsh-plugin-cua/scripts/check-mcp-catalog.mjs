@@ -19,17 +19,22 @@
  * @module
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
-const enginePath = join(packageRoot, 'lib', 'bin', 'cua-engine')
+// The engine is one file on macOS and a directory with an .exe on Windows.
+const enginePath = process.platform === 'win32'
+  ? join(packageRoot, 'lib', 'bin', 'cua-engine', 'cua-engine.exe')
+  : join(packageRoot, 'lib', 'bin', 'cua-engine')
 
+// `require.resolve` hands back an absolute path, and the ESM loader needs a URL:
+// on Windows a bare `C:\...` is read as a scheme named "c" and rejected.
 const { validateJsonSchemaValue, assertSupportedJsonSchema } = await import(
-  createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools')
+  pathToFileURL(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools')).href
 )
 
 const failures = []
@@ -100,6 +105,26 @@ function check(condition, label, detail = '') {
 if (!existsSync(enginePath)) {
   process.stderr.write(`the engine is missing at ${enginePath}; run \`pnpm run build:engine\` first\n`)
   process.exit(1)
+}
+
+// Ask the engine whether it speaks MCP at all, rather than assuming from the
+// platform. The macOS engine serves it and the Windows engine does not yet, but
+// that is a gap in one backend rather than a property of the operating system —
+// and a stage that quietly reports "passed" on a backend with no MCP server
+// would be worse than one that says so.
+{
+  const help = spawnSync(enginePath, ['--help'], { encoding: 'utf8' })
+  const text = `${help.stdout ?? ''}${help.stderr ?? ''}`
+  if (!text.includes('--mcp')) {
+    process.stdout.write(
+      '  (this engine does not implement `--mcp`, so it publishes no MCP catalog.\n'
+      + '   The macOS backend serves one and the Windows backend does not yet — which\n'
+      + '   means the package\'s own `cordis.patch.yml`, whose row starts the engine\n'
+      + '   with `--mcp`, cannot work on Windows. Use the native plugin row instead:\n'
+      + '   it registers the same tools directly from `lib/index.js`.)\n',
+    )
+    process.exit(0)
+  }
 }
 
 /**
@@ -234,7 +259,7 @@ for (const tool of tools) {
 
 // The two integration paths must agree on what exists. A tool present in one
 // and missing from the other is the drift this check exists to catch.
-const plugin = await import(join(packageRoot, 'lib', 'index.js'))
+const plugin = await import(pathToFileURL(join(packageRoot, 'lib', 'index.js')).href)
 const registered = []
 const service = {
   register: definition => { registered.push(definition); return () => {} },
