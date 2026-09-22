@@ -510,24 +510,13 @@ extension MacHost {
             let application = AX.application(target)
             let windows = AXArray.elements(application, kAXWindowsAttribute as String)
             let wanted = params.optionalString("windowTitle")
-            var chosen: (AXUIElement, CGRect)?
-            for window in windows {
-                let title = AX.string(window, kAXTitleAttribute as String) ?? ""
-                if let wanted, !title.localizedCaseInsensitiveContains(wanted) { continue }
-                if let frame = AX.frame(window), frame.width > 1, frame.height > 1 {
-                    chosen = (window, frame)
-                    if AX.bool(window, kAXMainAttribute as String) == true { break }
-                }
-            }
-            guard let (_, frame) = chosen else {
+            guard let chosen = await Self.pickWindow(pid: target, titleContains: wanted),
+                  let cgId = Self.matchWindowID(pid: target, frame: chosen.frame),
+                  let window = try await Capture.shareableWindow(id: cgId) else {
                 throw CuaError.notFound("pid \(pid) has no capturable window\(wanted.map { " matching \"\($0)\"" } ?? "")")
             }
-            guard let cgId = Self.matchWindowID(pid: target, frame: frame),
-                  let window = try await Capture.shareableWindow(id: cgId) else {
-                throw CuaError.notFound("the window of pid \(pid) is not shareable; it may be minimized or off-screen")
-            }
             request.window = window
-            request.region = frame
+            request.region = chosen.frame
         } else if let displayId {
             guard let display = try await Capture.shareableDisplay(id: CGDirectDisplayID(displayId)) else {
                 throw CuaError.notFound("no display with id \(displayId)")
@@ -537,23 +526,15 @@ extension MacHost {
         } else if let appQuery {
             let apps = try resolveApplications(pid: nil, query: appQuery.lowercased(), includeBackground: params.bool("includeBackground", default: false))
             guard let app = apps.first else { throw CuaError.notFound("no application matches \"\(appQuery)\"") }
-            let application = AX.application(app.processIdentifier)
-            let windows = AXArray.elements(application, kAXWindowsAttribute as String)
-            guard let window = windows.first, let frame = AX.frame(window),
-                  let cgId = Self.matchWindowID(pid: app.processIdentifier, frame: frame),
-                  let shareable = try await Capture.shareableWindow(id: cgId) else {
+            guard let chosen = await Self.pickWindow(pid: app.processIdentifier) else {
                 throw CuaError.notFound("no capturable window for \"\(appQuery)\"")
             }
-            request.window = shareable
-            request.region = frame
+            request.window = chosen.shareable
+            request.region = chosen.frame
         } else if params.bool("frontmost", default: !hasExplicitRegion), let app = NSWorkspace.shared.frontmostApplication {
-            let application = AX.application(app.processIdentifier)
-            let windows = AXArray.elements(application, kAXWindowsAttribute as String)
-            if let window = windows.first, let frame = AX.frame(window),
-               let cgId = Self.matchWindowID(pid: app.processIdentifier, frame: frame),
-               let shareable = try await Capture.shareableWindow(id: cgId) {
-                request.window = shareable
-                request.region = frame
+            if let chosen = await Self.pickWindow(pid: app.processIdentifier) {
+                request.window = chosen.shareable
+                request.region = chosen.frame
             } else {
                 request.region = await Self.fallbackCaptureFrame()
             }
@@ -633,6 +614,48 @@ extension MacHost {
     /// orientation only: the authoritative density of a capture is the `scale`
     /// that capture reports, because a window's backing scale can differ from its
     /// display's.
+    /// Choose the window a capture should use.
+    ///
+    /// `AXWindows` is not ordered by importance and its first entry is often a
+    /// menu-bar or overlay item — on this machine the frontmost application's
+    /// first accessibility window is the 33-point menu bar strip, so taking the
+    /// first entry captures a sliver instead of the window. Preference order is
+    /// the main window, then the focused one, then the largest, because a caller
+    /// asking for "the window" means the one with content in it.
+    ///
+    /// - Returns: the chosen shareable window with its frame, or `nil` when the
+    ///   application exposes nothing capturable.
+    static func pickWindow(
+        pid: pid_t,
+        titleContains wanted: String? = nil
+    ) async -> (shareable: SCWindow, frame: CGRect)? {
+        let application = AX.application(pid)
+        var candidates: [(window: AXUIElement, frame: CGRect, main: Bool, focused: Bool)] = []
+        for window in AXArray.elements(application, kAXWindowsAttribute as String) {
+            if let wanted {
+                let title = AX.string(window, kAXTitleAttribute as String) ?? ""
+                if !title.localizedCaseInsensitiveContains(wanted) { continue }
+            }
+            guard let frame = AX.frame(window), frame.width > 40, frame.height > 40 else { continue }
+            candidates.append((
+                window, frame,
+                AX.bool(window, kAXMainAttribute as String) ?? false,
+                AX.bool(window, kAXFocusedAttribute as String) ?? false
+            ))
+        }
+        guard let best = candidates.max(by: { left, right in
+            let leftScore = (left.main ? 2 : 0) + (left.focused ? 1 : 0)
+            let rightScore = (right.main ? 2 : 0) + (right.focused ? 1 : 0)
+            if leftScore != rightScore { return leftScore < rightScore }
+            return (left.frame.width * left.frame.height) < (right.frame.width * right.frame.height)
+        }) else { return nil }
+        // Resolving the shareable window needs the window-server id, which only
+        // the window list can map.
+        guard let cgId = Self.matchWindowID(pid: pid, frame: best.frame),
+              let shareable = try? await Capture.shareableWindow(id: cgId) else { return nil }
+        return (shareable, best.frame)
+    }
+
     /// The fallback capture target: the main display.
     ///
     /// Not the bounding box of all displays, which spans the gaps between them

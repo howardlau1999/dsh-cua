@@ -512,6 +512,7 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
           scaleY: { type: 'number', required: true },
           clipped: { type: 'boolean', required: true },
           displayId: { type: 'integer' },
+          windowId: { type: 'integer' },
           target: { type: 'string', required: true },
         },
       },
@@ -580,6 +581,7 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
         scaleY: num(raw.scaleY, num(raw.scale, 1)),
         clipped: raw.clipped === true,
         ...typeof raw.displayId === 'number' ? { displayId: raw.displayId } : {},
+        ...typeof raw.windowId === 'number' ? { windowId: raw.windowId } : {},
         target: describeTarget(raw, args),
       }
     },

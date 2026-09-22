@@ -295,6 +295,17 @@ if (status.screenRecording && !status.sessionLocked) {
   )
   check(typeof shot.clipped === 'boolean', 'cua_screenshot states whether the request was clipped')
 
+  // A window capture must pick the window, not the first entry of AXWindows:
+  // that ordering puts the menu bar first on a real desktop, which makes an
+  // unqualified capture return a 33-point strip instead of the window.
+  const { value: front } = await callTool(definitions, 'cua_screenshot', { frontmost: true, maxWidth: 600 })
+  check(
+    front.region[3] > 200 && front.region[2] > 200,
+    'a frontmost-window capture selects a real window, not the menu bar',
+    `region ${JSON.stringify(front.region)}`,
+  )
+  check(front.windowId !== undefined && front.windowId !== null, 'a window capture reports its windowId', String(front.windowId))
+
   // A rectangle that only partly overlaps a display, and one spanning the gap
   // between two: both must capture the overlap and say so, not fail and not
   // report the un-clipped request.

@@ -12,6 +12,22 @@ follows the **responsible process**, not the executable, so rebuilding the engin
 cannot lose the permission and the entry to enable in System Settings is the host
 application — not `cua-engine`, and not the terminal.
 
+## Step 0 — what driving the engine from the host already proved
+
+Run from a shell derived from the harness host, through the plugin's own
+`EngineClient` and the real `enginePath` from `cordis.patch.yml`:
+
+- permissions inherited from the host: Accessibility **true**, Screen Recording
+  **true**, `ready` true. The attribution rule holds in practice: the host
+  application's grants reach the engine it spawns.
+- `display.list` 3 displays, desktop `[-1168,-1080,3840,2062]`.
+- `window.list`, `tree.dump`, and `capture.screenshot` all answered correctly,
+  and `region x scale` reproduced the returned pixel size.
+
+What that does **not** prove is that the plugin is loaded into a live session:
+the tools exist only if Cordis registered them at boot. A tool call is the only
+way to confirm it, which is Step 1.
+
 ## Step 1 — the engine starts at all
 
 ```
