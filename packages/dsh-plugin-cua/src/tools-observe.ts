@@ -510,6 +510,7 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
           region: { type: 'array', items: { type: 'number' }, required: true },
           scale: { type: 'number', required: true },
           scaleY: { type: 'number', required: true },
+          clipped: { type: 'boolean', required: true },
           displayId: { type: 'integer' },
           target: { type: 'string', required: true },
         },
@@ -524,6 +525,9 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
           + `Captured ${value.target}${onDisplay}: ${value.pixelWidth}x${value.pixelHeight} px (${value.byteLength} bytes, ${value.mimeType}).\n`
           + `Captured screen region: x=${value.region[0]} y=${value.region[1]} width=${value.region[2]} height=${value.region[3]} `
           + `(top-left-origin screen points); image pixels per screen point = ${axes}.\n`
+          + (value.clipped
+            ? 'NOTE: the requested rectangle was clipped to the display it overlaps; `region` above is the area actually captured.\n'
+            : '')
           + 'To see it, read this path with read_image. To click something you see at image pixel (px, py), '
           + `click (${value.region[0]} + px/${value.scale}, ${value.region[1]} + py/${value.scaleY}).`,
         )
@@ -574,6 +578,7 @@ function screenshotTool(tools: ToolContext): ToolDefinition {
         region: region.length === 4 ? region : [0, 0, 0, 0],
         scale: num(raw.scale, 1),
         scaleY: num(raw.scaleY, num(raw.scale, 1)),
+        clipped: raw.clipped === true,
         ...typeof raw.displayId === 'number' ? { displayId: raw.displayId } : {},
         target: describeTarget(raw, args),
       }

@@ -77,6 +77,17 @@ enum TreeDump {
         "AXFilename",
     ]
 
+    /// One pending element plus the path that reached it.
+    struct Visit {
+        let element: AXUIElement
+        let depth: Int
+        let priority: Int
+        /// Roles of the ancestors, nearest last.
+        let ancestors: [String]
+        /// Whether each ancestor was itself emitted, aligned with `ancestors`.
+        let ancestorEmitted: [Bool]
+    }
+
     /// One visited element with its cached attributes.
     struct Node {
         let depth: Int
@@ -97,8 +108,6 @@ enum TreeDump {
         /// Flat element list backing index addressing until the next dump of the
         /// same process.
         let elements: [AXUIElement]
-        /// Identity map for the same elements, backing pointer addressing.
-        let pointers: [String: AXUIElement]
     }
 
     /// Walk one application or window subtree.
@@ -114,7 +123,10 @@ enum TreeDump {
         var elementIndex: [AXUIElement] = []
         var truncatedBy: String?
         // Priority breaks ties toward the content a caller almost always means.
-        var queue: [(element: AXUIElement, depth: Int, priority: Int)] = [(root, 0, 0)]
+        // Each entry carries the role path that reached it, which is what lets a
+        // role filter keep a match's true ancestors instead of every text-bearing
+        // element in the tree.
+        var queue: [Visit] = [Visit(element: root, depth: 0, priority: 0, ancestors: [], ancestorEmitted: [])]
 
         AX.setMessagingTimeout(root, seconds: 2.0)
 
@@ -127,7 +139,9 @@ enum TreeDump {
                 truncatedBy = "visit_limit"
                 break
             }
-            let (element, depth, _) = queue.removeFirst()
+            let visit = queue.removeFirst()
+            let element = visit.element
+            let depth = visit.depth
             visited += 1
 
             // The timeout is per element, so a deep tree would otherwise fall back
@@ -138,8 +152,10 @@ enum TreeDump {
             let role = attributes[kAXRoleAttribute as String]?.stringValue ?? ""
 
             let structural = structuralRoles.contains(role)
+            var emittedHere = false
             if options.includeStructural || !structural {
-                if shouldEmit(attributes: attributes, role: role, options: options) {
+                if shouldEmit(attributes: attributes, role: role, options: options, visit: visit) {
+                    emittedHere = true
                     let node = Node(depth: depth, element: element, attributes: attributes, frame: frame)
                     emitted.append(node)
                     elementIndex.append(element)
@@ -153,14 +169,18 @@ enum TreeDump {
             // A structural node does not consume depth: its children replace it.
             let childDepth = structural && !options.includeStructural ? depth : depth + 1
             guard childDepth <= options.maxDepth else { continue }
-            var batch: [(element: AXUIElement, depth: Int, priority: Int)] = []
+            let childAncestors = visit.ancestors + [role]
+            let childEmitted = visit.ancestorEmitted + [emittedHere]
+            var batch: [Visit] = []
             for child in AXArray.elements(element, kAXChildrenAttribute as String) {
                 let childRole = AX.string(child, kAXRoleAttribute as String) ?? ""
                 // The menu bar is a sibling of the window list. It is dozens of
                 // nodes of chrome that no caller wants before the content, so it
                 // sorts last instead of consuming the budget front-first.
                 if options.skipMenuBar, childRole == "AXMenuBar" { continue }
-                batch.append((child, childDepth, Self.visitPriority(childRole)))
+                batch.append(Visit(element: child, depth: childDepth,
+                                   priority: Self.visitPriority(childRole),
+                                   ancestors: childAncestors, ancestorEmitted: childEmitted))
             }
             if batch.count > 1 {
                 batch.sort { $0.priority < $1.priority }
@@ -175,8 +195,7 @@ enum TreeDump {
             truncatedBy: truncatedBy,
             elapsed: Date().timeIntervalSince(started),
             format: options.format,
-            elements: elementIndex,
-            pointers: [:]
+            elements: elementIndex
         )
     }
 
@@ -293,11 +312,30 @@ enum TreeDump {
     // MARK: - Filtering
 
     /// Whether one visited element earns a line in the output.
-    static func shouldEmit(attributes: [String: JSONValue], role: String, options: Options) -> Bool {
+    ///
+    /// With a role filter, a non-matching element is kept only when it is the
+    /// structural anchor of a matching subtree — the way an HTML selector keeps
+    /// the path above a match. Two extremes are both wrong: keeping every
+    /// element that carries text retains almost the whole tree (a container's
+    /// title is text too), and keeping only an unbroken chain of structural
+    /// wrappers drops the window the match lives in.
+    ///
+    /// The rule is therefore: keep a structural element that a filtered-out
+    /// matching chain descends from, and not the wrappers below it.
+    static func shouldEmit(
+        attributes: [String: JSONValue],
+        role: String,
+        options: Options,
+        visit: Visit? = nil
+    ) -> Bool {
         if !options.roleFilter.isEmpty && !options.roleFilter.contains(role) {
-            // A role filter still keeps ancestors that expose text, so a match
-            // stays anchored in its surroundings.
-            guard textAttributes.contains(where: { attributes[$0] != nil }) else { return false }
+            guard structuralRoles.contains(role) else { return false }
+            guard let visit else { return true }
+            // A structural ancestor above the match anchors the path; a second
+            // one below it is layout noise.
+            let structuralAncestors = zip(visit.ancestors, visit.ancestorEmitted)
+                .filter { structuralRoles.contains($0.0) && $0.1 }
+            return structuralAncestors.isEmpty
         }
         if options.interactiveOnly {
             return interactiveRoles.contains(role)

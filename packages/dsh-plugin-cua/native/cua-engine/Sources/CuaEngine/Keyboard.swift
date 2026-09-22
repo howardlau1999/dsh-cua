@@ -52,15 +52,31 @@ enum Keyboard {
         "f5": 96, "f6": 97, "f7": 98, "f3": 99, "f8": 100, "f9": 101,
         "f11": 103, "f13": 105, "f16": 106, "f14": 107, "f10": 109, "f12": 111,
         "f15": 113, "help": 114, "home": 115, "pageup": 116, "page_up": 116,
-        "forwarddelete": 117, "f4": 118, "end": 119, "f2": 120, "f1": 121,
+        "forwarddelete": 117, "f4": 118, "end": 119, "f2": 120, "f1": 122,
+        "pagedown": 121, "page_down": 121,
         "left": 123, "arrowleft": 123, "right": 124, "arrowright": 124,
         "down": 125, "arrowdown": 125, "up": 126, "arrowup": 126,
+    ]
+
+    /// Spellings that mean a key already in `namedKeys`.
+    ///
+    /// The canonical table uses short macOS names (`down`, `pageup`), but callers
+    /// reach for `downarrow` or `pgdn` just as often. Accepting the obvious
+    /// aliases costs nothing; rejecting them costs a wasted round trip.
+    static let keyAliases: [String: String] = [
+        "downarrow": "down", "uparrow": "up", "leftarrow": "left", "rightarrow": "right",
+        "arrowdown": "down", "arrowup": "up", "arrowleft": "left", "arrowright": "right",
+        "pgup": "pageup", "pgdn": "pagedown", "pagedn": "pagedown",
+        "del": "delete", "backspacekey": "backspace", "escapekey": "escape",
+        "escape_key": "escape", "returnkey": "return", "spacebar": "space",
+        "caps_lock": "capslock", "return_key": "return",
     ]
 
     /// Resolve a key name case-insensitively, also accepting single characters.
     static func keyCode(_ name: String) -> CGKeyCode? {
         let normalized = name.lowercased()
         if let code = namedKeys[normalized] { return code }
+        if let canonical = keyAliases[normalized], let code = namedKeys[canonical] { return code }
         // "KeyA"/"Digit1" style names are common in other automation stacks.
         if normalized.hasPrefix("key"), normalized.count == 4 {
             return namedKeys[String(normalized.dropFirst(3))]

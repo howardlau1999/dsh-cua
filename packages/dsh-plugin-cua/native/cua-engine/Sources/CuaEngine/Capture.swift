@@ -27,6 +27,11 @@ enum Capture {
         var quality: Double
         var format: String
         var showsCursor: Bool
+        /// Filled in by the capture with the region actually captured, which is
+        /// the requested region clipped to the display it came from. Reporting
+        /// the request instead would make `region` describe pixels that are not
+        /// in the image.
+        var capturedRegion: CGRect = .zero
     }
 
     /// Capture one image and encode it.
@@ -37,12 +42,16 @@ enum Capture {
     ///   image the caller receives — on a mixed-density setup that is the only
     ///   number that is true for this particular capture.
     static func run(_ request: Request) async throws -> JSONValue {
-        let native = try await captureImage(request)
-        let image = try downscaleIfNeeded(native, request: request)
-        let encoded = try encode(image, format: request.format, quality: request.quality)
+        var mutable = request
+        let native = try await captureImage(&mutable)
+        let image = try downscaleIfNeeded(native, request: mutable)
+        let encoded = try encode(image, format: mutable.format, quality: mutable.quality)
 
-        let pointWidth = max(request.region.width, 1)
-        let pointHeight = max(request.region.height, 1)
+        // The clipped region, not the request: `region` must describe the image
+        // the caller receives.
+        let captured = mutable.capturedRegion.isEmpty ? request.region : mutable.capturedRegion
+        let pointWidth = max(captured.width, 1)
+        let pointHeight = max(captured.height, 1)
         return jsonObject([
             "data": .string(encoded.data.base64EncodedString()),
             "mimeType": .string(encoded.mimeType),
@@ -51,11 +60,13 @@ enum Capture {
             "pointWidth": .double(Double(pointWidth)),
             "pointHeight": .double(Double(pointHeight)),
             "region": .array([
-                .double(Double(request.region.origin.x.rounded())),
-                .double(Double(request.region.origin.y.rounded())),
-                .double(Double(request.region.width.rounded())),
-                .double(Double(request.region.height.rounded())),
+                .double(Double(captured.origin.x.rounded())),
+                .double(Double(captured.origin.y.rounded())),
+                .double(Double(captured.width.rounded())),
+                .double(Double(captured.height.rounded())),
             ]),
+            /// True when the requested rectangle was clipped to the display it came from.
+            "clipped": .bool(captured != request.region),
             "scale": .double(Double(image.width) / Double(pointWidth)),
             "scaleY": .double(Double(image.height) / Double(pointHeight)),
             "byteLength": .int(encoded.data.count),
@@ -68,12 +79,12 @@ enum Capture {
     /// stream due to audio/video capture failure") when captures arrive in quick
     /// succession, which a perceive/act/perceive loop hits routinely. The failure
     /// is transient, so a bounded retry runs before it becomes a tool failure.
-    private static func captureImage(_ request: Request) async throws -> CGImage {
+    private static func captureImage(_ request: inout Request) async throws -> CGImage {
         if sessionLocked { throw lockedError() }
         var lastError: Error?
         for attempt in 1...3 {
             do {
-                return try await captureOnce(request)
+                return try await captureOnce(&request)
             } catch {
                 lastError = error
                 let nsError = error as NSError
@@ -96,35 +107,34 @@ enum Capture {
     /// Capturing at each target's native density and downscaling afterwards is
     /// simpler, correct on every layout, and what makes the measured `scale`
     /// trustworthy.
-    private static func captureOnce(_ request: Request) async throws -> CGImage {
+    private static func captureOnce(_ request: inout Request) async throws -> CGImage {
         if let window = request.window {
-            // `desktopIndependentWindow` captures the window itself, even when it
-            // is covered or sitting on another display, at that window's density.
+            // `desktopIndependentWindow` captures exactly the window at its own
+            // native density, so neither a `sourceRect` nor an output size is set
+            // here. Setting `sourceRect` to the window's own frame — which is
+            // what "just crop it to itself" looks like — makes ScreenCaptureKit
+            // fail with `-3811`, and forcing an output size derived from the
+            // display's density caps a 2x window at 1x. Letting the filter choose
+            // and downscaling afterwards is both correct and the only form that
+            // works.
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let configuration = SCStreamConfiguration()
-            // A region crop is expressed in the filter's own coordinate space,
-            // whose origin is the window's top-left.
-            let local = localRect(request.region, in: window.frame)
-            if local != window.frame { configuration.sourceRect = local }
-            // The window's own density, so a capture of a window on a scaled
-            // display keeps the detail that display is showing.
-            let scale = await density(ofDisplayContaining: window.frame)
-            configuration.width = max(1, Int((request.region.width * scale).rounded()))
-            configuration.height = max(1, Int((request.region.height * scale).rounded()))
             configuration.showsCursor = request.showsCursor
             configuration.capturesAudio = false
             configuration.scalesToFit = false
+            request.capturedRegion = window.frame
             return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         }
 
         if let display = request.display {
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let configuration = SCStreamConfiguration()
-            let local = localRect(request.region, in: display.frame)
-            if local != display.frame { configuration.sourceRect = local }
+            let region = clip(request.region, to: display.frame)
+            request.capturedRegion = region
+            configuration.sourceRect = localRect(region, in: display.frame)
             let scale = await density(of: display)
-            configuration.width = max(1, Int((request.region.width * scale).rounded()))
-            configuration.height = max(1, Int((request.region.height * scale).rounded()))
+            configuration.width = max(1, Int((region.width * scale).rounded()))
+            configuration.height = max(1, Int((region.height * scale).rounded()))
             configuration.showsCursor = request.showsCursor
             configuration.capturesAudio = false
             configuration.scalesToFit = false
@@ -144,16 +154,31 @@ enum Capture {
                 "the requested region \(request.region) does not overlap any display"
             )
         }
+        let region = clip(request.region, to: display.frame)
+        request.capturedRegion = region
         let scale = await density(of: display)
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
-        configuration.sourceRect = localRect(request.region, in: display.frame)
-        configuration.width = max(1, Int((request.region.width * scale).rounded()))
-        configuration.height = max(1, Int((request.region.height * scale).rounded()))
+        configuration.sourceRect = localRect(region, in: display.frame)
+        configuration.width = max(1, Int((region.width * scale).rounded()))
+        configuration.height = max(1, Int((region.height * scale).rounded()))
         configuration.showsCursor = request.showsCursor
         configuration.capturesAudio = false
         configuration.scalesToFit = false
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+    }
+
+    /// Intersect a capture region with the display it will be captured from.
+    ///
+    /// A region that only partly overlaps its display must be clipped: passing a
+    /// `sourceRect` that extends past the display's bounds makes ScreenCaptureKit
+    /// fail with an opaque `-3811` rather than capturing the overlap. This is the
+    /// normal case for a whole-desktop capture, whose bounding box spans the
+    /// gaps between displays.
+    private static func clip(_ region: CGRect, to frame: CGRect) -> CGRect {
+        let clipped = region.intersection(frame)
+        guard !clipped.isNull, clipped.width >= 1, clipped.height >= 1 else { return frame }
+        return clipped
     }
 
     /// Express a global rectangle in the local space of a container frame.
@@ -336,6 +361,18 @@ enum Capture {
             "the screen is locked, so nothing can be captured. Wake and unlock the Mac, then retry. "
                 + "(While locked, the frontmost application is also reported as loginwindow, so UI trees and input are unreliable too.)"
         )
+    }
+
+    /// The main display's frame, which is what an untargeted capture means.
+    ///
+    /// Deliberately not the bounding box of every display: that box spans the
+    /// gaps between displays, so it belongs to no single display and cannot be
+    /// produced as one image. A caller who wants more than one screen asks for
+    /// each display explicitly.
+    static func mainDisplayFrame() async -> CGRect {
+        let displays = (try? await displays()) ?? []
+        if let main = displays.first(where: { $0.displayID == mainDisplayId }) { return main.frame }
+        return displays.first?.frame ?? CGRect(x: 0, y: 0, width: 1920, height: 1080)
     }
 
     /// The union of every display, in top-left-origin global points.

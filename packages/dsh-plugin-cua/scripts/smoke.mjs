@@ -92,14 +92,17 @@ function fakeContext() {
  * value to `execute`. A double that omits it makes tools take a different path
  * than production, which is exactly the class of bug this test exists to catch.
  */
-async function callTool(definitions, name, args, signal = new AbortController().signal, validate = true) {
+async function callTool(definitions, name, args, options = {}) {
   const definition = definitions.find(entry => entry.name === name)
   if (definition === undefined) throw new Error(`tool ${name} is not registered`)
+  const validate = options.validate ?? true
   const value = await definition.execute(args, {
     callId: `smoke-${name}`,
     name,
     arguments: args,
-    signal,
+    signal: options.signal ?? new AbortController().signal,
+    // Writes fail closed without a session; the runtime always supplies one.
+    ...options.agent === undefined ? {} : { agent: options.agent },
   })
   if (validate) {
     const errors = validateJsonSchemaValue(definition.output.schema, value, '') ?? []
@@ -218,6 +221,41 @@ if (status.accessibility) {
   }
   check(rootRefused, 'element index 0 is refused with an explanation')
 
+  // A role filter must actually narrow the tree, and must be asserted on an
+  // application that has something to narrow: a filter returning nothing is
+  // correct for an app with no buttons, so asserting on whatever happens to be
+  // frontmost would be flaky in both directions.
+  const filterRoles = new Set(['AXButton', 'AXTextField', 'AXTextArea', 'AXLink', 'AXCheckBox', 'AXPopUpButton'])
+  const structural = new Set(['AXGroup', 'AXWindow', 'AXSheet', 'AXDialog', 'AXUnknown', 'AXSplitGroup',
+    'AXScrollArea', 'AXList', 'AXTable', 'AXRow', 'AXOutline', 'AXBrowser', 'AXColumn', 'AXGrid',
+    'AXSection', 'AXLayoutArea', 'AXLayoutItem', 'AXLandmarkRegion', 'AXLandmarkGroup'])
+  let filtered = undefined
+  for (const candidate of apps.apps.slice(0, 8)) {
+    const attempt = await callTool(definitions, 'cua_tree', { pid: candidate.pid, roles: [...filterRoles], maxDepth: 12 })
+    if (attempt.value.nodeCount > 0) {
+      filtered = attempt.value
+      break
+    }
+  }
+  if (filtered === undefined) {
+    process.stdout.write('  (no probed application exposes a filterable control; skipping role-filter checks)\n')
+  } else {
+    const roles = filtered.nodes.map(node => node.role)
+    check(
+      roles.every(role => filterRoles.has(role) || structural.has(role)),
+      'cua_tree roles= emits only matching roles plus structural anchors',
+      `roles present: ${[...new Set(roles)].join(',')}`,
+    )
+    check(
+      roles.some(role => filterRoles.has(role)),
+      'cua_tree roles= keeps the matches it found',
+      `${String(roles.filter(role => filterRoles.has(role)).length)} matching of ${String(roles.length)} nodes`,
+    )
+
+    const limited = await callTool(definitions, 'cua_tree', { pid: filtered.pid, maxDepth: 12, nodeLimit: 4 })
+    check(limited.value.truncatedBy === 'node_limit', 'cua_tree names the budget that truncated it', String(limited.value.truncatedBy))
+  }
+
   // A stale index must fail closed rather than act on whatever it finds now.
   let staleMessage = ''
   try {
@@ -244,6 +282,57 @@ if (status.screenRecording && !status.sessionLocked) {
   check(shot.pixelWidth > 0 && shot.pixelHeight > 0, 'cua_screenshot reports dimensions', `${String(shot.pixelWidth)}x${String(shot.pixelHeight)}`)
   check(shot.region.length === 4, 'cua_screenshot reports the captured screen region', JSON.stringify(shot.region))
   check(shot.scale > 0, 'cua_screenshot reports pixels per point', String(shot.scale))
+
+  // `region` plus `scale` is the contract a caller converts image pixels into
+  // clicks with, so it must reproduce the image it came with. A region reported
+  // from the request rather than from what was captured fails this.
+  const ratioX = shot.pixelWidth / shot.region[2]
+  const ratioY = shot.pixelHeight / shot.region[3]
+  check(
+    Math.abs(ratioX - shot.scale) < 0.02 && Math.abs(ratioY - shot.scaleY) < 0.02,
+    'region x scale reproduces the captured pixel size',
+    `pixels ${String(shot.pixelWidth)}x${String(shot.pixelHeight)} region ${String(shot.region[2])}x${String(shot.region[3])} scale ${String(shot.scale)}/${String(shot.scaleY)}`,
+  )
+  check(typeof shot.clipped === 'boolean', 'cua_screenshot states whether the request was clipped')
+
+  // A rectangle that only partly overlaps a display, and one spanning the gap
+  // between two: both must capture the overlap and say so, not fail and not
+  // report the un-clipped request.
+  if (displays.count > 1) {
+    const primary = displays.displays.find(display => display.main) ?? displays.displays[0]
+    const spanning = {
+      x: Math.round(primary.frame[0] - 200),
+      y: Math.round(primary.frame[1] - 200),
+      width: Math.round(primary.frame[2] + 400),
+      height: 300,
+      maxWidth: 800,
+    }
+    const { value: crossed } = await callTool(definitions, 'cua_screenshot', spanning)
+    check(existsSync(crossed.path), 'a rectangle spanning two displays still captures', crossed.path)
+    check(crossed.clipped === true, 'a partly-off-display rectangle is reported as clipped', JSON.stringify(crossed.region))
+    check(
+      crossed.region[2] <= spanning.width && crossed.region[3] <= spanning.height,
+      'the reported region never exceeds what was requested',
+      JSON.stringify(crossed.region),
+    )
+    const crossedRatio = crossed.pixelWidth / crossed.region[2]
+    check(
+      Math.abs(crossedRatio - crossed.scale) < 0.02,
+      'a clipped capture reports a scale matching its own region',
+      `${String(crossed.pixelWidth)} px over ${String(crossed.region[2])} points at scale ${String(crossed.scale)}`,
+    )
+  }
+
+  // Every display must be capturable on its own, including one at negative
+  // coordinates.
+  for (const display of displays.displays) {
+    const { value: one } = await callTool(definitions, 'cua_screenshot', { displayId: display.displayId, maxWidth: 400 })
+    check(
+      one.pixelWidth > 0 && one.displayId === display.displayId,
+      `cua_screenshot captures display ${String(display.displayId)}`,
+      `${String(one.pixelWidth)}x${String(one.pixelHeight)}`,
+    )
+  }
 } else if (status.sessionLocked) {
   // A locked console fails every capture; the tool must say so rather than
   // relaying ScreenCaptureKit's opaque stream error.
@@ -375,6 +464,19 @@ if (allowWrites && status.accessibility) {
   check(moved.delivered === true, 'cua_click moves the pointer', JSON.stringify(moved))
   const { value: chord } = await callTool(writeDefinitions, 'cua_key', { key: 'shift' })
   check(chord.delivered === true, 'cua_key delivers a modifier', JSON.stringify(chord))
+
+  // Names callers guess must resolve to the same key as the canonical spelling.
+  for (const alias of ['downarrow', 'pgdn', 'del', 'esc']) {
+    const { value } = await callTool(writeDefinitions, 'cua_key', { key: alias })
+    check(value.delivered === true, `cua_key resolves the alias "${alias}"`, String(value.reason ?? ''))
+  }
+  let unknownRejected = false
+  try {
+    await callTool(writeDefinitions, 'cua_key', { key: 'definitely-not-a-key' })
+  } catch (error) {
+    unknownRejected = /unknown key/u.test(String(error.message))
+  }
+  check(unknownRejected, 'cua_key rejects an unknown key name')
 }
 
 // ------------------------------------------------------------------- summary

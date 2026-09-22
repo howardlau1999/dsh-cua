@@ -254,7 +254,7 @@ function keyTool(ctx: Context, tools: ToolContext, mode: WriteApprovalMode): Too
     name: 'cua_key',
     description: 'Press a named key or a chord such as cmd+s, cmd+shift+t, or ctrl+c. '
       + 'The key name identifies a physical key position, so the shortcut is the same on every keyboard layout. '
-      + 'Names: letters and digits as written, plus return, tab, space, delete, escape, arrows (left/right/up/down), home, end, pageup, pagedown, f1–f20, keypad_* names, and the modifiers themselves. '
+      + 'Key names: letters and digits as written, plus return, tab, space, delete (or del), escape, arrows (down/up/left/right, or downarrow/uparrow/leftarrow/rightarrow), home, end, pageup/pgup, pagedown/pgdn, keypad_enter, keypad_plus, keypad_minus, keypad_0–9, f1–f20, and the modifiers themselves (cmd, shift, alt/option, ctrl, fn). '
       + 'Modifiers: cmd, shift, alt (option), ctrl, fn. '
       + 'Requires Accessibility permission.',
     parameters: {

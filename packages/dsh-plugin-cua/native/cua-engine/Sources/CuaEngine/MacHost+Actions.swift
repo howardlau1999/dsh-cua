@@ -17,8 +17,7 @@ extension MacHost {
     ///   stale index.
     func resolveElement(_ params: ParamsReader, pid: pid_t?) throws -> AXUIElement? {
         let index = params.optionalInt("element")
-        let pointer = params.optionalString("elementRef")
-        guard params.has("element") || params.has("elementRef") else { return nil }
+        guard params.has("element") else { return nil }
         // From here the caller asked for a specific element, so every failure
         // below is a real lookup failure rather than "no element requested".
 
@@ -53,12 +52,7 @@ extension MacHost {
             }
             return snapshot.elements[index]
         }
-        if let pointer, let element = snapshot.pointers[pointer] {
-            return element
-        }
-        throw CuaError.notFound(
-            "element reference \"\(pointer ?? "")\" is not in the last snapshot of pid \(targetPid); re-run cua_tree"
-        )
+        throw CuaError.notFound("no element was addressed; pass the index printed by cua_tree")
     }
 
     /// Resolve the screen point an action should target.
@@ -250,6 +244,16 @@ extension MacHost {
             let modifiers = try params.stringList("modifiers")
             let repeatCount = try params.int("repeat", default: 1, in: 1...100)
             let hold = try params.int("holdMs", default: 15, in: 0...2_000)
+            // An unrecognised name is a caller error, not a refused action: a
+            // silent `delivered: false` invites a model to keep going as if the
+            // shortcut had been pressed.
+            guard Keyboard.keyCode(key) != nil else {
+                throw CuaError.invalidRequest(
+                    "unknown key name \"\(key)\". Known names include letters, digits, return, tab, space, "
+                        + "delete, escape, the arrow keys, home, end, pageup, pagedown, f1-f20, the keypad keys, "
+                        + "and the modifiers themselves."
+                )
+            }
             return Keyboard.chord(key: key, modifiers: modifiers, repeatCount: repeatCount, holdMs: hold)
 
         case "insert":
@@ -551,10 +555,10 @@ extension MacHost {
                 request.window = shareable
                 request.region = frame
             } else {
-                request.region = await Self.unionScreenFrame()
+                request.region = await Self.fallbackCaptureFrame()
             }
         } else {
-            request.region = await Self.unionScreenFrame()
+            request.region = await Self.fallbackCaptureFrame()
         }
 
         // Apply an explicit region crop, expressed in screen points.
@@ -629,9 +633,12 @@ extension MacHost {
     /// orientation only: the authoritative density of a capture is the `scale`
     /// that capture reports, because a window's backing scale can differ from its
     /// display's.
-    /// The bounding box of every display, the fallback capture target.
-    static func unionScreenFrame() async -> CGRect {
-        await Capture.desktopBounds()
+    /// The fallback capture target: the main display.
+    ///
+    /// Not the bounding box of all displays, which spans the gaps between them
+    /// and therefore no display's own pixels.
+    static func fallbackCaptureFrame() async -> CGRect {
+        await Capture.mainDisplayFrame()
     }
 
     // MARK: - Applications and messaging
@@ -669,11 +676,43 @@ extension MacHost {
 
         case "hide":
             let app = try resolveApplication(params)
-            return jsonObject(["hidden": .bool(app.hide()), "name": .string(app.localizedName ?? "")])
+            // `NSRunningApplication.hide()` returns false and leaves the
+            // application visible on current macOS, so the state is read back
+            // rather than trusted, and a real failure comes with a reason.
+            let requested = app.hide()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let hidden = app.isHidden
+            var members: [String: JSONValue?] = [
+                "hidden": .bool(hidden),
+                "name": .string(app.localizedName ?? ""),
+            ]
+            if !hidden {
+                members["reason"] = .string(
+                    requested
+                        ? "the hide request was accepted but \(app.localizedName ?? "the application") is still visible"
+                        : "macOS refused to hide \(app.localizedName ?? "the application"); "
+                            + "hiding is unavailable here. Use action=activate on the application you want in front instead."
+                )
+            }
+            return jsonObject(members)
 
         case "unhide":
             let app = try resolveApplication(params)
-            return jsonObject(["unhidden": .bool(app.unhide()), "name": .string(app.localizedName ?? "")])
+            let requested = app.unhide()
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let visible = !app.isHidden
+            var members: [String: JSONValue?] = [
+                "unhidden": .bool(visible),
+                "name": .string(app.localizedName ?? ""),
+            ]
+            if !visible {
+                members["reason"] = .string(
+                    requested
+                        ? "the unhide request was accepted but \(app.localizedName ?? "the application") is still hidden"
+                        : "macOS refused to unhide \(app.localizedName ?? "the application")"
+                )
+            }
+            return jsonObject(members)
 
         case "quit":
             let app = try resolveApplication(params)

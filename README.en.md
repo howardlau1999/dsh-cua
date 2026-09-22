@@ -57,6 +57,12 @@ convenience capture APIs silently change density with region size — so the
 engine calibrates each display once and reports the `scale` that is true for the
 image you actually received.
 
+A capture rectangle is clipped to the one display it overlaps, and `region`
+reports the area actually captured rather than the area requested — otherwise
+`region x scale` would describe pixels that are not in the image. An untargeted
+capture means the main display, not the bounding box of all displays, because
+that box spans the gaps between them and belongs to no single display.
+
 **Failures are explicit, never silent.** A coordinate outside every display is
 rejected instead of being clamped to a screen edge; a stale element index fails
 closed instead of addressing whatever now occupies it; a malformed coordinate
