@@ -334,6 +334,11 @@ make smoke-writes   # 额外包含真实指针移动、按键，以及后台应�
 
 `smoke-writes` 会真的启动 TextEdit、把前台让给别的应用、在**后台**写入并读回，同时断言前台应用没有被抢走——后台操作这条保证就是这么守住的。
 
+## 下一步
+
+交接文档：[docs/HANDOFF.md](docs/HANDOFF.md)——待办清单、未验证的代码路径、以及每项的判断依据。
+排查记录：[docs/case-study-tool-visibility.md](docs/case-study-tool-visibility.md)。
+
 ## 已知限制
 
 - **仅 macOS**。其他平台会加载插件但所有引擎调用返回 `unsupported_platform`。
