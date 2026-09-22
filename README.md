@@ -166,7 +166,35 @@ pnpm run smoke           # 端到端：加载插件 + 调用真实引擎
 pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有可见副作用）
 ```
 
-## 接入 harness
+## 接入 harness（两种方式）
+
+### 方式 A：MCP provider（推荐）
+
+引擎内置 MCP server 模式（`cua-engine --mcp`），通过 `dsh-mcp-client` 接入。工具在模型侧显示为 `mcp__cua__<name>`。
+
+这是**推荐方式**，也是仓库既有的 computer-use provider 走的路子（`packages/computer-use`、`packages/experimental/computer-use-cua-driver-mcp`）。在 `cordis.patch.yml` 里：
+
+```yaml
+- insert:
+    - id: mcp-cua
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cua
+        transport: stdio
+        command: /path/to/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
+        args: [--mcp]
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+        reconnect: { enabled: true }
+```
+
+MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投影成文本，base64 会变成给模型的无用文本）。截图目录默认 `~/.dsh/cua-screenshots`，可用 `DSH_CUA_SCREENSHOT_DIR` 覆盖。
+
+### 方式 B：原生插件包
+
+> 注意：这条路径目前**在桌面应用里不可用**。插件能加载、能注册工具，但模型看不到它们；原因尚未查明（详见下方"已知限制"）。
+
+
 
 > **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、11 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。用 `lsof -p <宿主 pid> | grep profiles` 读出真实答案，别猜。
 
@@ -279,5 +307,6 @@ make smoke-writes   # 额外包含真实指针移动、按键，以及后台应�
 - **`cua_type` 走合成事件**，某些应用会丢弃过快的输入；必要时用 `perCharacterDelayMs` 降速。不带 `element` 时对后台应用无效（见上文表格）。
 - **`route: "pid"` 的合成点击**对后台窗口能否生效取决于具体应用，不做保证；需要可靠的后台操作请用 `cua_element`。
 - **窗口标题需要屏幕录制权限**，这是 macOS 的限制，不是实现选择。
-- **`element.action` 的索引只在同一引擎会话内有效**。引擎空闲 10 分钟后退出，之后索引失效需要重新取树。
+- **`element.action` 的索引只在同一引擎会话内有效**。引擎空闲 10 分钟后退出，之后索引失效需要重新取树。**MCP 模式下引擎由 MCP 客户端托管**，生命周期随之而定。
+- **原生插件行在桌面应用里工具不可见（未查明）**。已确认的事实：插件在会话所在进程内加载、`apply()` 完整跑完、12 个工具确实在 `ctx.tools.schemas()` 里（插件自己回读的日志为证）、没有任何 `tools.restrict()` 约束它、声明路径与出参 schema 都验证过、工具也不会随时间消失。但 `wireSchemas(scope)` 生成的模型目录里没有它们。可疑方向是 `ScopedLayers.effect` 的 `scopeOf(ctx)` 判定——带 scope 标签的 ctx 会注册进该 scope 的私有层，只有该 scope 及其子代可见。诊断代码在插件里（`DSH_CUA_BOOT_LOG`），但读取 `scopeOf` 需要解析 asar 内的 `@deepseek-ai/dsh-scope`，尚未跑通。MCP 方式绕过了这个问题。
 - **连续截图有瞬时失败**。ScreenCaptureKit 在快速连续捕获时会间歇性报 `-3811`，引擎对这类错误做有限重试（3 次、递增退避）后才上报。

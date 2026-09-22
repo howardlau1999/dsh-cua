@@ -12,6 +12,7 @@ if arguments.contains("--help") || arguments.contains("-h") {
     Usage:
       cua-engine                 Serve newline-delimited JSON requests on stdio.
       cua-engine --probe         Print one engine.status response and exit.
+      cua-engine --mcp            Serve the Model Context Protocol on stdio.
       cua-engine --version       Print version and platform, then exit.
       cua-engine --help          Print this message.
 
@@ -83,6 +84,13 @@ if arguments.contains("--probe") {
     // without starting a session.
     let request = EngineRequest(id: .string("probe"), method: "engine.status", params: nil)
     FileHandle.standardOutput.write(await engine.dispatchAsync(request).encodedLine())
+    exit(0)
+}
+
+// `--mcp` serves the Model Context Protocol on stdio instead of this engine's
+// own protocol, so the harness's existing MCP client can expose these tools.
+if arguments.contains("--mcp") {
+    await runMcpLoop(engine: engine)
     exit(0)
 }
 
