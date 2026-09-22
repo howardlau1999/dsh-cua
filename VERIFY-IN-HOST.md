@@ -1,5 +1,27 @@
 # Verifying the plugin inside the harness host
 
+## Which profile the desktop application boots
+
+`~/.dsh/profiles/` holds one directory per profile, and the Electron application
+boots exactly one of them. On this machine it is **`desktop`**, not `web`;
+`web` is the CLI profile. Installing the plugin into the wrong one produces a
+plugin that loads perfectly, registers all eleven tools, and is never reached —
+and because the failure is "the tools do not exist", it looks identical to a
+plugin that failed to load.
+
+Read the answer off the running host rather than guessing:
+
+```sh
+ps -o command= -p "$(pgrep -f 'MacOS/DeepSeek Harness$' | head -1)"
+lsof -p "$(pgrep -f 'MacOS/DeepSeek Harness$' | head -1)" | grep profiles
+```
+
+The profile directory is both the process's working directory and an explicit
+argument to `dsh-desktop-host`. `dsh --profile desktop --dump-config` refuses to
+run — that profile is owned by the Electron application — so the check is
+`lsof`, not the CLI.
+
+
 Everything in the package is verified against the engine launched from a shell.
 What is **not** verified is the plugin running inside the application that loads
 it, because that is the only configuration where macOS attributes the

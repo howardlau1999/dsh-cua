@@ -168,15 +168,17 @@ pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有�
 
 ## 接入 harness
 
-1. 把包放进 profile 的依赖里（`~/.dsh/profiles/web/package.json`）：
+> **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、11 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。用 `lsof -p <宿主 pid> | grep profiles` 读出真实答案，别猜。
+
+1. 把包放进 profile 的依赖里（`~/.dsh/profiles/<profile>/package.json`）：
 
    ```json
    { "dependencies": { "@deepseek-ai/dsh-plugin-cua": "link:/path/to/cua/packages/dsh-plugin-cua" } }
    ```
 
-   然后在 profile 目录执行 `dsh plugin install`（或 `pnpm install`）。
+   然后在 profile 目录执行 `dsh plugin install`（或 `pnpm install`）。若该 profile 由桌面应用管理、`dsh` 拒绝操作，直接建符号链接即可（`node_modules/@deepseek-ai/dsh-plugin-cua` → 包目录），与 profile 既有的链接方式一致。
 
-2. 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加：
+2. 在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 追加：
 
    ```yaml
    - insert:
