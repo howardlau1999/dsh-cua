@@ -98,31 +98,68 @@ make smoke-writes   # also moves the pointer and exercises background writing
 `Makefile` for the exact paths, or run `pnpm install && pnpm run build` inside
 `packages/dsh-plugin-cua` with your own Node.
 
-## Install into a harness profile
+## Install
 
-```sh
-cd packages/dsh-plugin-cua && pnpm install && pnpm run build
+The package declares `dsh.bundle`, so the plugin manager can install it. In the
+application: **Settings → Plugins → Add plugin**, then the package's absolute
+directory:
+
+```
+/path/to/packages/dsh-plugin-cua
 ```
 
-Then add the package to a profile's dependencies and insert it in that profile's
-`cordis.patch.yml`:
+The manager adds it as a bundle layer of the chosen profile, and the package's
+`cordis.patch.yml` contributes one row: an MCP client over the engine's `--mcp`
+mode. The tools reach a model as **`mcp__cua__<name>`**. Restart the application
+after installing.
+
+### Known behaviour: tools are absent from pre-existing sessions
+
+Tools are registered when the host boots. A session created before that boot and
+restored afterwards does not see them; a new session does. Measured: one host,
+one session that predated the boot could not call the tools while a session
+created after it could.
+
+This is a property of anything mounted at the profile or bundle layer, not of
+this package. **When the tools appear to be missing, open a new session first** —
+see [`docs/case-study-tool-visibility.md`](docs/case-study-tool-visibility.md)
+for the full diagnosis, including the four wrong conclusions reached before it.
+
+### Manual wiring, without the plugin manager
+
+```yaml
+- insert:
+    - id: mcp-cua
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cua
+        transport: stdio
+        command: /absolute/path/to/packages/dsh-plugin-cua/lib/bin/cua-engine
+        args: [--mcp]
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+        reconnect: { enabled: true }
+```
+
+The engine also installs as a native plugin row registering `cua_*` tools
+directly. That form is verified working, but the package does not ship it: both
+rows together put two identical catalogs of twelve tools in front of the model.
+To use it, replace the row above with:
 
 ```yaml
 - insert:
     - id: cua
-      name: '@deepseek-ai/dsh-plugin-cua'
+      name: /absolute/path/to/packages/dsh-plugin-cua/lib/index.js
       config:
         enginePath: /absolute/path/to/packages/dsh-plugin-cua/lib/bin/cua-engine
         writeApproval: always     # always | session | never
-        screenshotDir: ~/.dsh/cua-screenshots
         idleShutdownMs: 600000
 ```
 
-`writeApproval` controls the plugin's own gate on top of the macOS grants:
-`always` asks before every write, `session` asks once per write tool per session,
-`never` leaves the macOS grants as the only gate. In a session whose approval
-policy is `never` — where a refused approval blocks the action outright —
-`never` is the only usable setting.
+`writeApproval` gates writes on top of the macOS grants: `always` asks before
+every write, `session` asks once per write tool per session, `never` leaves the
+macOS grants as the only gate. In a session whose approval policy is `never` — a
+refused approval blocks the action outright — `never` is the only usable value.
 
 ## Engine CLI
 
