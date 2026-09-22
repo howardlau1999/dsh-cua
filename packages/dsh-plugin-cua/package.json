@@ -1,0 +1,44 @@
+{
+  "name": "@deepseek-ai/dsh-plugin-cua",
+  "version": "0.1.0",
+  "description": "Computer Use for DeepSeek Harness: native macOS accessibility trees, screen capture, synthesized input, and Apple-event messaging as model tools",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/types/**/*.d.ts",
+    "lib/bin/**"
+  ],
+  "scripts": {
+    "build": "node scripts/build-engine.mjs && node scripts/build-plugin.mjs",
+    "build:engine": "node scripts/build-engine.mjs",
+    "build:plugin": "node scripts/build-plugin.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "check": "node scripts/check.mjs",
+    "check:schemas": "node scripts/check-schemas.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:writes": "node scripts/smoke.mjs --write"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
+    "@deepseek-ai/schemastery": "^0.1.5-rc.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
+    "@deepseek-ai/dsh-tools": "link:../../../deepseek-harness/packages/core/tools",
+    "@deepseek-ai/schemastery": "link:../../../deepseek-harness/vendor/schemastery",
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.9.0"
+  }
+}
