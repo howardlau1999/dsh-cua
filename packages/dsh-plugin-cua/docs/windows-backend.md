@@ -610,8 +610,13 @@ not a code change.
 
 ## `--mcp`: the same dispatch, a second envelope
 
-`cua-engine --mcp` serves the Model Context Protocol on stdio, which is how the
-package's own `cordis.patch.yml` exposes the catalog as `mcp__cua__<name>`.
+`cua-engine --mcp` serves the Model Context Protocol on stdio, so the harness's
+own MCP client can expose the catalog as `mcp__cua__<name>`. Reaching it takes a
+row of its own in a profile patch — see the README's manual wiring — because it
+needs a `command` pointing at the engine, and that path differs per platform: a
+directory ending in `cua-engine.exe` on Windows, the single file `cua-engine` on
+macOS. The package's own `cordis.patch.yml` therefore names the plugin rather
+than the engine, which needs no path at all.
 
 Nothing in that layer is platform-specific, and `src/McpServer.cs` sits beside
 `Protocol.cs` rather than under `Win/` to make that plain. The engine's own

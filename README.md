@@ -227,14 +227,12 @@ pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有�
 这个包**声明了 `dsh.bundle`**，本身就是一个可被 DSH 插件管理器安装的组合包。在 DSH 的 **设置 → Plugins → Add plugin** 里填这个包的**绝对路径**：
 
 ```
-/Users/hh.liu/code/cua/packages/dsh-plugin-cua
+/path/to/packages/dsh-plugin-cua
 ```
 
-插件管理器会把它加成 profile 的一个 bundle 层，包内的 `cordis.patch.yml` 提供一行 `mcp-cua`：经 `@deepseek-ai/dsh-mcp-client` 接入引擎的 MCP server，工具在模型侧显示为 **`mcp__cua__<name>`**。
+插件管理器会把它加成 profile 的一个 bundle 层，包内的 `cordis.patch.yml` 提供**一行**：插件本身，而引擎由插件在包内自行解析。**这一行里没有任何需要改的路径**——绝对路径在除作者那台机器以外的每台机器上都是错的；而且一条路径也不可能同时对两个平台成立（Windows 的引擎是目录 `lib/bin/cua-engine/cua-engine.exe`，macOS 的引擎是单文件 `lib/bin/cua-engine`）。
 
 安装后**重启应用**，并且在**新建的会话**里使用——见下方"已知行为"。
-
-> 包若被移动到别处，改 `cordis.patch.yml` 里那一处绝对路径。用绝对路径是刻意的：打包版 harness 把裸包名解析到**自身安装目录**，看不到 profile 的 `node_modules`；绝对路径是唯一能触达安装目录之外的形式。
 
 ### 已知行为：工具在既有会话中不可见
 
@@ -244,23 +242,17 @@ pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有�
 
 这不是本插件特有的问题——挂在 profile / bundle 层的工具都有这个特性。遇到"工具不在"时，先新建一个会话再判断。
 
-### 为什么不用原生插件行
+### 为什么 bundle 只给一行
 
-包内也曾提供一行原生插件（直接注册 `cua_*`）。它能工作，但与 MCP 那行**同时存在**会让模型看到两套同义工具（`cua_*` 与 `mcp__cua__*`，共 24 个），所以收敛成 MCP 一套。
+原生插件行与 MCP 行**同时存在**会让模型看到两套同义工具（`cua_*` 与 `mcp__cua__*`，共 24 个），所以只保留一行。
 
-这个取舍的代价应当说清楚：插件的 `apply()` 只在原生行上运行，所以 **`writeApproval` 写操作审批和 `ctx.computerUse` 的 provider 登记都只存在于原生行**。MCP 行由 `dsh-mcp-client` 承载，它不加载本插件，因此没有插件级写门槛——macOS 的授权是唯一那道门；`ctx.computerUse` 也会报告没有 provider，尽管 12 个工具都在。
+**保留的是原生插件行**，因为两者的差别都只在原生行上有正面意义：
 
-当前 profile 的审批提示是关闭的（见"写操作授权"），此时 `writeApproval` 无论哪一档都不会真正拦下写操作，所以这个代价暂时没有实际影响。**要恢复写审批、或要让 `ctx.computerUse` 认到这个引擎，就把 `cordis.patch.yml` 换成原生行**（两者只留一行，不要并存）：
+- 工具名是短名 `cua_*`；
+- **`writeApproval` 写操作审批只在这条路径上生效**——MCP 行由 `dsh-mcp-client` 承载，它不加载本插件，所以没有插件级写门槛，操作系统的授权是唯一那道门；
+- **`ctx.computerUse` 的 provider 登记也只在这条路径上发生**，同一个原因：插件的 `apply()` 只在插件被加载时运行。
 
-```yaml
-- insert:
-    - id: cua
-      name: <包目录>/lib/index.js
-      config:
-        enginePath: <包目录>/lib/bin/cua-engine
-        writeApproval: never
-        idleShutdownMs: 600000
-```
+成本方面：MCP 行的长处是不经过插件层，而原生行连**路径**都不需要——它只写包名，引擎由插件在包内找到。想要 `mcp__cua__*` 这个名字、或要接 MCP provider，见下方"方式 A"，那条路需要一个逐平台不同的绝对路径。
 
 ## 手动接入（不用插件管理器时）
 
@@ -268,7 +260,7 @@ pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有�
 
 引擎内置 MCP server 模式（`cua-engine --mcp`），通过 `dsh-mcp-client` 接入。工具在模型侧显示为 `mcp__cua__<name>`。
 
-这是**推荐方式**，也是仓库既有的 computer-use provider 走的路子（`packages/computer-use`、`packages/experimental/computer-use-cua-driver-mcp`）。在 `cordis.patch.yml` 里：
+这条路子要用 `--mcp`，所以 `command` 必须是**绝对路径**，而且**逐平台不同**：Windows 是目录里的 `cua-engine.exe`，macOS 是单文件 `cua-engine`。在 `cordis.patch.yml` 里：
 
 ```yaml
 - insert:

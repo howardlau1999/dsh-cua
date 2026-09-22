@@ -180,7 +180,15 @@ profile configuration.
 
 ## What this package settled on
 
-One row, the MCP client over the engine's `--mcp` mode, contributing twelve
-tools that appear as `mcp__cua__<name>`. The engine also installs as a native
-plugin row; that form is documented in the README's alternative, and it was
-verified working — it is not used because one catalog is better than two.
+One row, and it is the **native plugin row**: twelve tools named `cua_*`, with
+the engine resolved from inside the package.
+
+The MCP client over the engine's `--mcp` mode was the first choice and still
+works — it is documented in the README's manual wiring — but a row that reaches
+the engine directly has to name a path, and no single path is right for both
+platforms: the Windows engine is a directory ending in `cua-engine.exe`, the
+macOS engine is the single file `cua-engine`. That row also carried an absolute
+path belonging to one machine, which is wrong on every other one. The plugin row
+needs only the package name and finds its own engine either way, and it is the
+only one of the two on which `writeApproval` and the `ctx.computerUse`
+registration take effect.

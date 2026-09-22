@@ -7,8 +7,15 @@ first for why the integration looks the way it does.
 ## Where things stand
 
 Working and verified: the Swift engine, the MCP server over it, the bundle, and
-the install path. The twelve tools reach a model as `mcp__cua__<name>` in a
-session created after the host booted.
+the install path. The twelve tools reach a model as `cua_*` in a session created
+after the host booted.
+
+The bundle's row is the **native plugin row**, not the MCP one. A row that names
+the engine has to carry a path, and that path differs per platform — a directory
+ending in `cua-engine.exe` on Windows, the single file `cua-engine` on macOS — so
+the shipped patch names the package instead and lets the plugin find its own
+engine. `cua-engine --mcp` is still there and still verified; reaching it is the
+README's manual-wiring alternative.
 
 Verified by direct measurement, not inference:
 
@@ -97,19 +104,22 @@ each has a regression check.
 
 The MCP row does **not** carry the plugin's own `writeApproval`, and cannot: the
 plugin's `apply()` never runs on that path, because `dsh-mcp-client` is its
-sibling row rather than its loader. The macOS grant is the only gate there.
+sibling row rather than its loader. The operating system's grants are the only
+gate there.
 
-Whether that matters depends on the session's approval preset, and today it does
-not: this profile runs with approval prompts disabled, so a plugin-level gate
-would be answered `unavailable` and would refuse every write. `writeApproval`
-only has teeth when the session can actually prompt.
+Whether that matters depends on the session's approval preset, and in a session
+that cannot prompt it does not: a plugin-level gate would be answered
+`unavailable` and would refuse every write. `writeApproval` only has teeth when
+the session can actually prompt.
 
-So the decision is: **keep one catalog on the MCP row, and treat the native row
-as the opt-in for a deployment that can prompt.** The native row now carries
-both things the MCP row cannot — the write gate and the `ctx.computerUse`
-registration — and switching is a one-line patch change, documented in the
-README. Do not run both: that is the twenty-four-tool catalog the case study
-already paid for.
+That argument decided which row to ship, once the path problem did: **the native
+row**, because it is the one that carries the write gate and the
+`ctx.computerUse` registration, and because a row naming the engine has to carry
+a path that differs per platform while a row naming the package carries none.
+The MCP row remains for a deployment that wants `mcp__cua__*` or is wiring the
+engine as an MCP provider directly; switching is a one-line patch change,
+documented in the README. Do not run both: that is the twenty-four-tool catalog
+the case study already paid for.
 
 If the gate is ever needed *without* giving up the MCP row, the missing piece is
 a thin plugin that owns the MCP child itself (registering `computerUse` and
@@ -193,17 +203,20 @@ Still open:
 
 - **An engine-side `screenshotDir`.** Unchanged: the MCP boundary writes captures
   to `~/.dsh/cua-screenshots` (overridable with `DSH_CUA_SCREENSHOT_DIR`), while
-  the native protocol still returns inline base64. The native row remains the
-  odd one out here, and it is the row this work did not exercise.
-- **The native row has not been exercised from a model session.** Everything
-  verified here went through the MCP row. The native row's registration path is
-  asserted by `smoke.mjs`, but its *tool results* — text projection, image
-  admission through the attachment store, the write gate's refusal wording —
-  have never been seen from a session. Open a new session on the native row
-  before trusting it, exactly as the case study says.
-- **Windows and Linux.** `PlatformHost` in `Protocol.swift` is the seam, and the
-  new unit tests run anywhere. This is still the largest remaining piece of work
-  and the one with no local way to verify.
+  the native protocol still returns inline base64 and the plugin decides where it
+  lands. The setting lives in the plugin's config rather than the engine's, which
+  is where it belongs for the row that is now shipped.
+- **The macOS side of the native row has not been exercised from a model
+  session.** Everything verified on macOS went through the MCP row; the native
+  row's registration path is asserted by `smoke.mjs`, but its *tool results* —
+  text projection, image admission through the attachment store, the write gate's
+  refusal wording — have never been seen from a macOS session. Open a new session
+  on the native row before trusting it there.
+- **Windows is done**, and it was done on the native row: the C#/.NET engine
+  implements all twelve methods and `--mcp`, `check-mcp-catalog.mjs` validates its
+  catalog (128 checks), and the smoke test drives real windows. Linux is the one
+  platform with no backend; `IPlatformHost` is the seam, and `UnsupportedHost`
+  answers honestly in the meantime.
 
 ## Known limitations, all documented
 

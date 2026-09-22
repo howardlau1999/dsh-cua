@@ -364,9 +364,14 @@ directory:
 ```
 
 The manager adds it as a bundle layer of the chosen profile, and the package's
-`cordis.patch.yml` contributes one row: an MCP client over the engine's `--mcp`
-mode. The tools reach a model as **`mcp__cua__<name>`**. Restart the application
-after installing.
+`cordis.patch.yml` contributes one row: the plugin itself, with the engine
+resolved from inside the package. There is no path to edit, and that is the
+point — an absolute path would be wrong on every machine but the one it was
+written on, and one path could not be right for both platforms anyway, since the
+Windows engine is a directory (`lib/bin/cua-engine/cua-engine.exe`) while the
+macOS engine is a single file (`lib/bin/cua-engine`).
+
+The tools reach a model as `cua_*`. Restart the application after installing.
 
 ### Known behaviour: tools are absent from pre-existing sessions
 
@@ -382,51 +387,9 @@ for the full diagnosis, including the four wrong conclusions reached before it.
 
 ### Manual wiring, without the plugin manager
 
-```yaml
-- insert:
-    - id: mcp-cua
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: cua
-        transport: stdio
-        command: /absolute/path/to/packages/dsh-plugin-cua/lib/bin/cua-engine
-        args: [--mcp]
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
-        reconnect: { enabled: true }
-```
+Install the package into a profile yourself:
 
-The engine also installs as a native plugin row registering `cua_*` tools
-directly. That form is verified working, but the package does not ship it: both
-rows together put two identical catalogs of twelve tools in front of the model.
-To use it, replace the row above with:
-
-```yaml
-- insert:
-    - id: cua
-      name: /absolute/path/to/packages/dsh-plugin-cua/lib/index.js
-      config:
-        enginePath: /absolute/path/to/packages/dsh-plugin-cua/lib/bin/cua-engine
-        writeApproval: always     # always | session | never
-        idleShutdownMs: 600000
-```
-
-The two rows differ in three ways, all in the plugin layer rather than in what
-the tools can do: the native row names its tools `cua_*` instead of
-`mcp__cua__*`; `writeApproval` applies **only** to the native row; and the
-`ctx.computerUse` provider registration happens **only** on the native row. Both
-of the latter are because a plugin's `apply()` runs only when the plugin is
-loaded, and `dsh-mcp-client` is a sibling row rather than a loader for it.
-
-`writeApproval` gates writes on top of the macOS grants: `always` asks before
-every write, `session` asks once per write tool per session, `never` leaves the
-macOS grants as the only gate. In a session whose approval policy is `never` — a
-refused approval blocks the action outright — `never` is the only usable value,
-and a plugin-level gate would refuse every write rather than gate it. Choose the
-native row when the session can prompt and the gate should be enforced, or when
-the harness's computer-use capability should report this engine as its provider.
-1. Put the package in the profile's dependencies
-   (`~/.dsh/profiles/web/package.json`):
+1. Put it in the profile's dependencies (`~/.dsh/profiles/web/package.json`):
 
    ```json
    { "dependencies": { "@deepseek-ai/dsh-plugin-cua": "link:/path/to/cua/packages/dsh-plugin-cua" } }
@@ -441,20 +404,57 @@ the harness's computer-use capability should report this engine as its provider.
        - id: cua
          name: '@deepseek-ai/dsh-plugin-cua'
          config:
-           enginePath: /path/to/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
-           writeApproval: never        # always | session | never
-           screenshotDir: ~/.dsh/cua-screenshots
+           writeApproval: always       # always | session | never
            idleShutdownMs: 600000
-           allowedScript: false        # Windows only: may cua_app's script run PowerShell
+           allowedScript: false        # Windows: may cua_app's script run PowerShell
+           # screenshotDir: /absolute/path/to/cua-screenshots
    ```
 
-   `enginePath` is optional: the plugin looks for the bundled engine first
-   (`lib/bin/cua-engine` on macOS; `lib/bin/cua-engine/cua-engine.exe` on
-   Windows), then for a debug build in the source tree.
+   Nothing here needs a path into the package. The row names it, and the plugin
+   finds the engine inside it — `lib/bin/cua-engine/cua-engine.exe` on Windows,
+   `lib/bin/cua-engine` on macOS. Set `enginePath` only to point somewhere else,
+   such as a build straight out of the source tree.
 
-3. Restart the harness (both the engine binary path and the system grants are
-   fixed at startup).
+3. Restart the harness. Both the engine path and the system grants are fixed at
+   startup.
 
+`writeApproval` gates writes on top of whatever the operating system already
+enforces: `always` asks before every write, `session` asks once per write tool per
+session, and `never` leaves the OS as the only gate. In a session whose approval
+policy is `never` — a refused approval blocks the action outright — `never` is the
+only usable value, because a plugin-level gate would refuse every write rather
+than gate it.
+
+#### Exposing the catalog over MCP instead
+
+The engine also speaks the Model Context Protocol on stdio, so the harness's own
+MCP client can expose the same twelve tools as `mcp__cua__<name>`:
+
+```yaml
+- insert:
+    - id: mcp-cua
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cua
+        transport: stdio
+        command: /absolute/path/to/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
+        args: [--mcp]
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+        reconnect: { enabled: true }
+```
+
+This route does need an absolute path, and the path differs per platform: a
+directory ending in `cua-engine.exe` on Windows, the single file `cua-engine` on
+macOS. Use one row or the other, not both — together they put two identical
+catalogs of twelve tools in front of the model.
+
+The two differ in three ways, all in the plugin layer rather than in what the
+tools can do: the native row names its tools `cua_*` instead of `mcp__cua__*`;
+`writeApproval` applies **only** to the native row; and the `ctx.computerUse`
+provider registration happens **only** on the native row. Both of the latter are
+because a plugin's `apply()` runs only when the plugin is loaded, and
+`dsh-mcp-client` is a sibling row rather than a loader for it.
 ## Permissions (macOS)
 
 The state the engine reports comes from `AXIsProcessTrusted()` and

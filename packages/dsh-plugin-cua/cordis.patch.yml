@@ -4,33 +4,37 @@
 # the rows reach the composition without depending on how a profile resolves
 # bare module names.
 #
-# Computer Use: see and operate the macOS desktop — accessibility trees, screen
-# capture, synthesized input, and Apple events.
+# Computer Use: see and operate the desktop — accessibility trees, screen
+# capture, synthesized input, and application control.
 #
-# The engine is a separate native helper. macOS attributes the Accessibility and
-# Screen Recording grants to the process responsible for it — the application
-# hosting the harness, not `cua-engine` — so those are the entries to enable in
-# System Settings. The `cua_status` tool reports what is missing and names the
-# application to enable.
+# The engine is a separate native helper, and the plugin finds the one inside
+# this package on its own: `lib/bin/cua-engine/cua-engine.exe` on Windows,
+# `lib/bin/cua-engine` on macOS. That is why this row names no path. An absolute
+# path cannot be shipped — it is wrong on every machine but the one it was
+# written on — and one path could not be right for both platforms anyway, since
+# the Windows engine is a directory and the macOS engine is a single file.
 #
-# Update the absolute path below if this package is moved. It is absolute on
-# purpose: a packaged harness resolves bare package names against its own
-# installation, which cannot see a profile's node_modules, and an absolute path
-# is the one form that reaches a package living outside it.
+# macOS only: the Accessibility and Screen Recording grants attach to the process
+# responsible for the engine — the application hosting the harness, not
+# `cua-engine` — so those are the entries to enable in System Settings.
+# `cua_status` reports what is missing and names the application to enable.
 - insert:
-    # The engine also speaks the Model Context Protocol on stdio, so the
-    # harness's own MCP client exposes its catalog. Tools appear to a model as
-    # `mcp__cua__<name>`. This is the integration path the desktop application
-    # documents for providers that live outside its own installation.
-    - id: mcp-cua
-      name: '@deepseek-ai/dsh-mcp-client'
+    - id: cua
+      name: '@deepseek-ai/dsh-plugin-cua'
       config:
-        serverName: cua
-        transport: stdio
-        command: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
-        args:
-          - --mcp
-        toolCallTimeoutMs: 120000
-        failOnStartupError: false
-        reconnect:
-          enabled: true
+        # `always` asks before every write. Use `session` to ask once per write
+        # tool per session, or `never` if this profile's sessions cannot prompt:
+        # a refused approval blocks the action outright, so `never` is the only
+        # usable value there.
+        writeApproval: always
+        idleShutdownMs: 600000
+
+        # Windows only, and off by default: `cua_app` action=script runs a
+        # PowerShell snippet, which — unlike a macOS Apple event — is not scoped
+        # to any application. Turn it on only for a session that should have it.
+        allowedScript: false
+
+        # Where `cua_screenshot` writes its files. Absolute, because the plugin
+        # does not expand `~`. Uncomment to move the images away from the
+        # default beside the rest of the session state.
+        # screenshotDir: /absolute/path/to/cua-screenshots
