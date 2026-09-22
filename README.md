@@ -62,7 +62,8 @@ cua/
 
 | 工具 | 作用 | 权限 |
 |---|---|---|
-| `cua_status` | 引擎/权限状态与修复指引，`request:true` 触发系统授权弹窗 | 无 |
+| `cua_status` | 引擎/权限状态与修复指引（纯读） | 无 |
+| `cua_request_permissions` | 触发 macOS 授权弹窗，返回与 `cua_status` 相同的报告 | 无 |
 | `cua_displays` | 显示器布局：每块屏的 id、矩形、像素密度，以及桌面总范围 | 无 |
 | `cua_apps` | 列出运行中/已安装的应用（名称、bundle id、pid、是否前台） | 无 |
 | `cua_windows` | 列出屏幕上的窗口：`windowId`、所属应用、标题、屏幕矩形 | 辅助功能 |
@@ -236,7 +237,7 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
 
 
 
-> **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、11 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。用 `lsof -p <宿主 pid> | grep profiles` 读出真实答案，别猜。
+> **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、12 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。用 `lsof -p <宿主 pid> | grep profiles` 读出真实答案，别猜。
 
 1. 把包放进 profile 的依赖里（`~/.dsh/profiles/<profile>/package.json`）：
 

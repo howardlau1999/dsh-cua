@@ -7,13 +7,14 @@ background applications, take screenshots, synthesize mouse and keyboard input,
 and drive applications through their own APIs and Apple events.
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin
-package: eleven `cua_*` tools over a native Swift engine.
+package: twelve `cua_*` tools over a native Swift engine.
 
 ## What it does
 
 | Tool | Purpose | Permission |
 |---|---|---|
 | `cua_status` | Engine state, and exactly how to fix what is missing | — |
+| `cua_request_permissions` | Raise the macOS permission prompts | — |
 | `cua_displays` | Display layout: ids, rectangles, densities, desktop bounds | — |
 | `cua_apps` | Running or installed applications | — |
 | `cua_windows` | On-screen windows with ids and screen rectangles | Accessibility |
@@ -156,10 +157,20 @@ To use it, replace the row above with:
         idleShutdownMs: 600000
 ```
 
+The two rows differ in three ways, all in the plugin layer rather than in what
+the tools can do: the native row names its tools `cua_*` instead of
+`mcp__cua__*`; `writeApproval` applies **only** to the native row; and the
+`ctx.computerUse` provider registration happens **only** on the native row. Both
+of the latter are because a plugin's `apply()` runs only when the plugin is
+loaded, and `dsh-mcp-client` is a sibling row rather than a loader for it.
+
 `writeApproval` gates writes on top of the macOS grants: `always` asks before
 every write, `session` asks once per write tool per session, `never` leaves the
 macOS grants as the only gate. In a session whose approval policy is `never` — a
-refused approval blocks the action outright — `never` is the only usable value.
+refused approval blocks the action outright — `never` is the only usable value,
+and a plugin-level gate would refuse every write rather than gate it. Choose the
+native row when the session can prompt and the gate should be enforced, or when
+the harness's computer-use capability should report this engine as its provider.
 
 ## Engine CLI
 
@@ -195,6 +206,14 @@ Methods: `engine.status`, `engine.permissions`, `engine.request_permissions`,
   matters.
 - Element indices live only as long as the engine session; a stale index is
   rejected with a message saying to re-read the tree.
+- Screen capture works only inside the host's process tree. macOS attributes the
+  Screen Recording grant to the process responsible for the engine, so an engine
+  started from a terminal has no capture attribution — and its first
+  ScreenCaptureKit call does not fail, it stops answering. A watchdog stops the
+  engine after 12 s rather than letting it hang, and the MCP client reconnects
+  onto a fresh one; a hung engine otherwise blocks capture for every process on
+  the machine. Trees, windows, and application lists are unaffected, so the CLI
+  above remains the way to debug those.
 
 ## License
 
