@@ -399,12 +399,6 @@ final class MacHost: PlatformHost, @unchecked Sendable {
         ), query)
     }
 
-    /// Whether two applications are equally good answers to one query.
-    static func sameRank(_ left: NSRunningApplication, _ right: NSRunningApplication, query: String) -> Bool {
-        isExactMatch(left, query) == isExactMatch(right, query)
-            && (left.activationPolicy == .regular) == (right.activationPolicy == .regular)
-    }
-
     /// Match one accessibility window frame against the window server's list,
     /// which is the only source of the `CGWindowID` that capture needs.
     static func matchWindowID(pid: pid_t, frame: CGRect) -> CGWindowID? {
