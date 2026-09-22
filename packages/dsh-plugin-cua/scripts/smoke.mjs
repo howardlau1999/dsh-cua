@@ -175,6 +175,29 @@ check(
   'cua_status lists cua_tree only when Accessibility is granted',
 )
 
+// The other half of the permission surface, and the only tool whose side effect
+// is a system dialog. With the permissions already granted macOS raises nothing,
+// so this asserts the report rather than the dialog: the point is that the two
+// engine methods return different shapes — `engine.status` nests the report
+// under `permissions` and `engine.request_permissions` returns it flat — and
+// that both project into the same value. Reading only the nested shape reported
+// every permission as missing for the request path.
+const { value: requested } = await callTool(definitions, 'cua_request_permissions', {})
+check(
+  requested.accessibility === status.accessibility && requested.screenRecording === status.screenRecording,
+  'cua_request_permissions reports the same permissions as cua_status',
+  `request ${String(requested.accessibility)}/${String(requested.screenRecording)} vs status ${String(status.accessibility)}/${String(status.screenRecording)}`,
+)
+check(
+  requested.ready === status.ready && requested.platform === status.platform,
+  'cua_request_permissions reports the same platform readiness as cua_status',
+)
+check(
+  requested.missing.length === status.missing.length,
+  'cua_request_permissions reports the same missing set as cua_status',
+  JSON.stringify(requested.missing),
+)
+
 // ------------------------------------------------------- observation tools
 
 process.stdout.write('\nobservation\n')
