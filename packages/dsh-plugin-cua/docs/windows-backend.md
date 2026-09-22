@@ -608,24 +608,44 @@ honest summary is: this plugin is a legitimate developer tool with the same
 capabilities as a RAT, and on a managed endpoint that is a conversation with IT,
 not a code change.
 
-## Not implemented: `--mcp`
+## `--mcp`: the same dispatch, a second envelope
 
-The macOS engine also serves the Model Context Protocol on stdio, and the
-package's own `cordis.patch.yml` uses that: its one row starts the engine with
-`--mcp` and lets the harness's MCP client expose the catalog as
-`mcp__cua__<name>`. **The Windows engine does not implement `--mcp`**, so that
-row cannot work here, and `scripts/check-mcp-catalog.mjs` reports the gap by
-probing the engine's own `--help` rather than passing quietly.
+`cua-engine --mcp` serves the Model Context Protocol on stdio, which is how the
+package's own `cordis.patch.yml` exposes the catalog as `mcp__cua__<name>`.
 
-Use the native plugin row on Windows — it registers the same twelve tools
-directly from `lib/index.js`, which is the integration this backend was built and
-tested against (the manual wiring in the README shows it). Filling the gap means
-porting `McpServer.swift`: an `initialize` / `tools/list` / `tools/call` shim over
-the dispatch table that already exists, plus the screenshot-to-file step, which
-materializes the capture because MCP hands back text rather than a path. The tool
-descriptions in that catalog would also have to become platform-aware, since they
-live in the engine and cannot come from `src/platform.ts` the way the plugin's
-own catalog does.
+Nothing in that layer is platform-specific, and `src/McpServer.cs` sits beside
+`Protocol.cs` rather than under `Win/` to make that plain. The engine's own
+protocol and MCP are two envelopes around one operation:
+
+```
+Engine.Execute(EngineRequest) -> EngineOutcome        <- decides nothing about the envelope
+        |                                             <- the dispatch, shared
+        +-- {"id":1,"result":{...}}                   <- the engine's own protocol
+        +-- {"jsonrpc":"2.0","id":1,"result":{         <- MCP
+               "content":[{"type":"text","text":"{...}"}]}}
+```
+
+`initialize`, `notifications/initialized`, `notifications/cancelled`, `ping`,
+`tools/list`, and `tools/call` are the whole surface; a notification is answered
+with silence, and an engine failure becomes `isError: true` carrying
+`code: message` rather than a JSON-RPC error, because the call itself succeeded.
+
+Two things do differ from the macOS catalog, and both are deliberate:
+
+**The descriptions are written for Windows.** They are what a model reads, and a
+sentence about the Accessibility grant or an Apple event would be false here.
+This is the same rewrite `src/platform.ts` performs on the plugin's own copy of
+the catalog, for the same reason. The *schemas* are identical, because they
+describe the same twelve operations — and `scripts/check-mcp-catalog.mjs`
+enforces exactly that: the names must match the TypeScript catalog, and every
+schema must validate with the harness's own validator.
+
+**A capture is materialized to a file.** MCP hands a tool result back as a text
+block, and a screenshot is megabytes of base64 that would spend the model's whole
+budget on an unreadable blob — so the bytes are written beside the session
+(`$DSH_CUA_SCREENSHOT_DIR`, defaulting to `~/.dsh/cua-screenshots`) and the path
+is returned instead. The filename uses a colon-free timestamp, because a colon is
+legal in a Windows path only as a drive separator.
 
 ## Deliberate deviations from the macOS contract
 

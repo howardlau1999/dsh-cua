@@ -458,7 +458,6 @@ macOS 上 `smoke:writes` 会真的启动 TextEdit、把前台让给别的应用�
 
 ## 已知限制
 
-- **Windows 引擎没有实现 `--mcp`**。macOS 引擎同时充当 MCP provider，而包自带的 `cordis.patch.yml` 正是按 `--mcp` 启动引擎的；这一行在 Windows 上无法工作。Windows 上请用原生插件行——它直接从 `lib/index.js` 注册同样的十二个工具。详见 [docs/windows-backend.md](packages/dsh-plugin-cua/docs/windows-backend.md#not-implemented--mcp)。
 - **只有 macOS 和 Windows 两个后端**。其他平台会加载插件，但所有引擎调用返回 `unsupported_platform`。
 - **跨屏区域按最大重叠归属单块屏**。一块跨两块屏的区域不会被拼接成一张图；它由重叠面积最大的那块屏捕获，超出该屏的部分为空白/黑边。需要完整跨屏视图时分别截两块屏。
 - **锁屏时不可用**。macOS 上 ScreenCaptureKit 会以 `-3811` 失败，且最前台应用会变成 `loginwindow`；Windows 上会切到锁屏桌面。两个后端都会显式报告 `the screen is locked`，`cua_status` 也会把 `sessionLocked` 标为 true 并让 `ready` 为 false，而不是把底层错误抛给模型。

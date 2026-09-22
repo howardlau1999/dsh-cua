@@ -45,6 +45,16 @@ public static class Program
 
         var engine = new Engine(CreateHost(args));
 
+        // `--mcp` serves the Model Context Protocol on stdio instead of this
+        // engine's own protocol, so the harness's existing MCP client can expose
+        // these tools. The two loops differ only in the envelope they put around
+        // the same dispatch.
+        if (Has(args, "--mcp"))
+        {
+            McpServer.Serve(engine, stdin, stdout);
+            return 0;
+        }
+
         if (Has(args, "--probe"))
         {
             // One status response and exit, which is how a setup check reads the
@@ -148,6 +158,7 @@ public static class Program
 
         Usage:
           cua-engine                 Serve newline-delimited JSON requests on stdio.
+          cua-engine --mcp           Serve the Model Context Protocol on stdio.
           cua-engine --probe         Print one engine.status response and exit.
           cua-engine --version       Print version and platform, then exit.
           cua-engine --call M        Send one request for method M and exit.
@@ -158,6 +169,9 @@ public static class Program
         Protocol: one JSON object per line in, one JSON object per line out.
           {"id":1,"method":"engine.status","params":{}}
         Each response carries either "result" or "error".
+
+        --mcp speaks the same operations in the Model Context Protocol's
+        vocabulary instead: initialize, tools/list, and tools/call.
 
         Platform: this build targets Windows. The backends are selected at
         startup and reported by `engine.status` as `backend`.

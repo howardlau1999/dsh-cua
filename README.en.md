@@ -675,11 +675,6 @@ has no way to post keystrokes to a process.
 
 ## Known limitations
 
-- **The Windows engine does not implement `--mcp`.** The macOS engine also serves
-  the Model Context Protocol, which is what the package's own
-  `cordis.patch.yml` wires up; on Windows that row cannot work. Install the
-  native plugin row instead — it registers the same twelve tools directly. See
-  [docs/windows-backend.md](packages/dsh-plugin-cua/docs/windows-backend.md#not-implemented--mcp).
 - **Only the macOS and Windows backends exist.** Other platforms load the plugin,
   but every engine call returns `unsupported_platform`.
 - **A region spanning displays goes to a single display, by overlap.** Such a

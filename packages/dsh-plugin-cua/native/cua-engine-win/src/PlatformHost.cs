@@ -85,6 +85,24 @@ public sealed class Engine(IPlatformHost host)
     /// <summary>Route one decoded request to its capability.</summary>
     public string Dispatch(EngineRequest request)
     {
+        var outcome = Execute(request);
+        return outcome.Error is null
+            ? EngineResponse.Result(request.Id, outcome.Value!)
+            : EngineResponse.Failure(request.Id, outcome.Error);
+    }
+
+    /// <summary>
+    /// Run one operation and hand back its value or its failure, unwrapped.
+    /// </summary>
+    /// <remarks>
+    /// This is the seam every protocol front end sits on. The engine's own
+    /// newline-delimited protocol wraps the outcome in a <c>result</c>/<c>error</c>
+    /// envelope; the Model Context Protocol wraps the same outcome in a text
+    /// content block. Neither is more fundamental than the other, so the
+    /// dispatch decides nothing about the envelope and both front ends reuse it.
+    /// </remarks>
+    public EngineOutcome Execute(EngineRequest request)
+    {
         try
         {
             var parameters = new Params(request.Params, request.Method);
@@ -104,11 +122,11 @@ public sealed class Engine(IPlatformHost host)
                 "app" => host.App(parameters),
                 _ => throw CuaException.UnknownMethod($"unknown method \"{request.Method}\""),
             };
-            return EngineResponse.Result(request.Id, value);
+            return new EngineOutcome(value, null);
         }
         catch (Exception error)
         {
-            return EngineResponse.Failure(request.Id, EngineResponse.AsCuaError(error));
+            return new EngineOutcome(null, EngineResponse.AsCuaError(error));
         }
     }
 
@@ -123,6 +141,9 @@ public sealed class Engine(IPlatformHost host)
         ["permissions"] = host.PermissionStatus(),
     };
 }
+
+/// <summary>One dispatched operation: a value, or the failure that replaced it.</summary>
+public sealed record EngineOutcome(JsonNode? Value, CuaException? Error);
 
 /// <summary>Platform facts reported by <c>engine.status</c>.</summary>
 public static class PlatformInfo
