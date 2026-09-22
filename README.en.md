@@ -75,10 +75,16 @@ returning an empty window list.
 macOS 15.2 or newer, the Swift toolchain (`xcode-select --install`), and Node 22+.
 
 Accessibility is required for trees, input, and element actions; Screen
-Recording for screenshots; Automation for `cua_app`'s `script` action. The
-grants attach to the process hosting the engine, so the application that loads
-the plugin is what you enable in System Settings, and it must be restarted after
-a grant changes. `cua_status` reports precisely which are missing.
+Recording for screenshots; Automation for `cua_app`'s `script` action.
+
+The grants attach to the **responsible process**, not to the binary. Measured:
+copying the engine to a file name that has never been granted anything still
+reports the grant as present, because the grant follows whatever launched the
+process rather than the executable. Two consequences: rebuilding or moving the
+engine cannot lose the permission, and the application to enable in System
+Settings is the one that loads the plugin — not `cua-engine`, and not the
+terminal you launched it from. `cua_status` names that application and its pid,
+and the grant only takes effect on a fresh launch.
 
 ## Build
 

@@ -90,10 +90,19 @@ final class MacHost: PlatformHost, @unchecked Sendable {
             }
         }
         let list = names.joined(separator: " and ")
-        return "macOS has not granted \(list) to the process hosting this engine. "
-            + "Open System Settings → Privacy & Security → \(list), add or enable the host application, "
-            + "then quit and relaunch it. Accessibility is required for UI trees, clicks, and typing; "
-            + "Screen Recording is required for screenshots."
+        // Naming the host matters: macOS attributes the grant to the process
+        // responsible for this engine, which is the application that loaded the
+        // plugin — not `cua-engine`, and not the terminal it was launched from.
+        // A user told only "grant Accessibility" opens the pane and finds a list
+        // of applications with no idea which entry is theirs.
+        let host = ProcessInfo.processInfo.environment["__CFBundleIdentifier"]
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "the application running this engine"
+        return "macOS has not granted \(list) to the application hosting this engine (\"\(host)\", pid "
+            + "\(ProcessInfo.processInfo.processIdentifier)). "
+            + "Open System Settings → Privacy & Security → \(list), enable that application (add it with the + "
+            + "button if it is not listed), then quit and relaunch it — the grant takes effect only on a fresh launch. "
+            + "Accessibility is required for UI trees, clicks, and typing; Screen Recording is required for screenshots."
     }
 
     /// Fail closed on every accessibility-dependent method.
