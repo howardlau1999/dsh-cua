@@ -166,7 +166,7 @@ pnpm run smoke           # 端到端：加载插件 + 调用真实引擎
 pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有可见副作用）
 ```
 
-## 安装（推荐：作为插件包安装）
+## 安装（作为插件包安装）
 
 这个包**声明了 `dsh.bundle`**，本身就是一个可被 DSH 插件管理器安装的组合包。在 DSH 的 **设置 → Plugins → Add plugin** 里填这个包的**绝对路径**：
 
@@ -174,16 +174,31 @@ pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有�
 /Users/hh.liu/code/cua/packages/dsh-plugin-cua
 ```
 
-包内的 `cordis.patch.yml` 提供两行：
+插件管理器会把它加成 profile 的一个 bundle 层，包内的 `cordis.patch.yml` 提供一行 `mcp-cua`：经 `@deepseek-ai/dsh-mcp-client` 接入引擎的 MCP server，工具在模型侧显示为 **`mcp__cua__<name>`**。
 
-| 行 | 作用 |
-|---|---|
-| `mcp-cua` | 通过 `@deepseek-ai/dsh-mcp-client` 接入引擎的 MCP server，工具形如 `mcp__cua__<name>` |
-| `cua` | 原生插件行，直接注册 `cua_*` 工具 |
+安装后**重启应用**，并且在**新建的会话**里使用——见下方"已知行为"。
 
-两行都带，是因为它们走不同的加载器路径——能通其中一条就能拿到工具。安装后需要重启。
+> 包若被移动到别处，改 `cordis.patch.yml` 里那一处绝对路径。用绝对路径是刻意的：打包版 harness 把裸包名解析到**自身安装目录**，看不到 profile 的 `node_modules`；绝对路径是唯一能触达安装目录之外的形式。
 
-> 包若被移动到别处，改 `cordis.patch.yml` 里那两处绝对路径。用绝对路径是刻意的：打包版 harness 把裸包名解析到**自身安装目录**，看不到 profile 的 `node_modules`；绝对路径是唯一能触达安装目录之外的形式。
+### 已知行为：工具在既有会话中不可见
+
+工具由宿主启动时注册。**在那个宿主启动之前就已存在、之后被恢复的会话看不到它们**；新建的会话可以。实测：同一个宿主里，一个跨越多次重启恢复的老会话调不到工具，新建会话正常。
+
+这不是本插件特有的问题——挂在 profile / bundle 层的工具都有这个特性。遇到"工具不在"时，先新建一个会话再判断。
+
+### 为什么不用原生插件行
+
+包内也曾提供一行原生插件（直接注册 `cua_*`）。它能工作，但与 MCP 那行**同时存在**会让模型看到两套同义工具（`cua_*` 与 `mcp__cua__*`，共 24 个），所以收敛成 MCP 一套。原生那套的注册路径已验证可用，需要短名字时可以把 `cordis.patch.yml` 换成原生行：
+
+```yaml
+- insert:
+    - id: cua
+      name: <包目录>/lib/index.js
+      config:
+        enginePath: <包目录>/lib/bin/cua-engine
+        writeApproval: never
+        idleShutdownMs: 600000
+```
 
 ## 手动接入（不用插件管理器时）
 
