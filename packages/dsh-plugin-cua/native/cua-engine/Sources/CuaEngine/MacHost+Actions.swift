@@ -381,85 +381,102 @@ extension MacHost {
 
     /// Walk a menu path such as `["File", "Export", "PDF"]` and invoke the leaf.
     ///
-    /// Menu items are unreachable through normal traversal because the menu bar
-    /// only materializes open menus; resolving them explicitly by title is what
-    /// makes menu-driven commands scriptable without stealing the pointer.
+    /// Menu items are unreachable through normal traversal because a menu only
+    /// materializes while it is open, so each level is opened as the walk
+    /// descends: a menu bar item exposes its contents as an `AXMenu` child once
+    /// it has been pressed, and a submenu item behaves the same way. That is why
+    /// the press and the descent are one step rather than two — the press is what
+    /// makes the next level addressable at all.
+    ///
+    /// A failed walk leaves the menus it opened on screen, so the bar item is
+    /// pressed again to close them. A menu left open swallows the next click the
+    /// caller makes.
+    ///
+    /// - Returns: `performed` plus, on failure, the level reached and why.
     private func menuAction(element: AXUIElement, params: ParamsReader) throws -> JSONValue {
         let path = try params.stringList("path")
         guard !path.isEmpty else {
             throw CuaError.invalidRequest("the menu action requires a non-empty \"path\" of menu titles")
         }
-        var current = element
 
-        // Start at the menu bar. An application element exposes it as a child;
-        // a bare element (a window, a menu item) has no such child, so the
+        // Start at the menu bar. An application element exposes it as an
+        // attribute; a bare element (a window, a menu item) has none, so the
         // system-wide menu bar is the fallback for "the menu bar of whatever is
         // frontmost".
-        let container: AXUIElement
-        if let bar = AX.element(current, kAXMenuBarAttribute as String) {
-            container = bar
-        } else if let bar = AX.element(current, "AXMenuBar") {
-            container = bar
+        let bar: AXUIElement
+        if let found = AX.element(element, kAXMenuBarAttribute as String) ?? AX.element(element, "AXMenuBar") {
+            bar = found
         } else {
             let system = AXUIElementCreateSystemWide()
             AX.setMessagingTimeout(system, seconds: 2.0)
-            guard let bar = AX.element(system, kAXMenuBarAttribute as String) else {
+            guard let found = AX.element(system, kAXMenuBarAttribute as String) else {
                 return jsonObject([
                     "performed": .bool(false),
                     "reason": .string("no menu bar is reachable from this element; target an application instead"),
                 ])
             }
-            container = bar
+            bar = found
         }
-        let titles = path
-        current = container
 
+        /// The open menu inside a menu bar item or submenu item, which is where
+        /// that item's own entries live.
+        func submenu(of item: AXUIElement) -> AXUIElement? {
+            AX.elements(item, kAXChildrenAttribute as String).first { candidate in
+                AX.string(candidate, kAXRoleAttribute as String) == "AXMenu"
+            } ?? AX.element(item, kAXChildrenAttribute as String)
+        }
+
+        /// Press `item` and return the menu it opened, retrying once: the first
+        /// press on a bar item opens it, and on some applications the contents
+        /// only appear after the press has been processed.
+        func open(_ item: AXUIElement) -> AXUIElement? {
+            let first = AX.perform(item, kAXPressAction as String)
+            if let menu = submenu(of: item), !AX.elements(menu, kAXChildrenAttribute as String).isEmpty {
+                return menu
+            }
+            guard first == .success else { return submenu(of: item) }
+            Thread.sleep(forTimeInterval: 0.15)
+            return submenu(of: item)
+        }
+
+        var container = bar
         var traversed: [JSONValue] = []
-        for (index, title) in titles.enumerated() {
-            let items = AXArray.elements(current, kAXChildrenAttribute as String)
+        var openedBarItem: AXUIElement?
+
+        for (index, title) in path.enumerated() {
+            let items = AX.elements(container, kAXChildrenAttribute as String)
             guard let match = items.first(where: { item in
                 let itemTitle = AX.string(item, kAXTitleAttribute as String) ?? ""
                 return itemTitle.compare(title, options: .caseInsensitive) == .orderedSame
             }) else {
+                if let opened = openedBarItem { AX.perform(opened, kAXPressAction as String) }
                 return jsonObject([
                     "performed": .bool(false),
                     "traversed": .array(traversed),
                     "reason": .string("no menu item titled \"\(title)\" under \(traversed.isEmpty ? "the menu bar" : "the open menu")"),
                 ])
             }
-            traversed.append(.string(title))
-            if index == titles.count - 1 {
+
+            if index == path.count - 1 {
                 let error = AX.perform(match, kAXPressAction as String)
-                if error == .success {
-                    return jsonObject(["performed": .bool(true), "path": .array(traversed)])
-                }
-                // Menus only respond while open; opening the parent and retrying
-                // is what a real click does.
-                if let parent = AX.element(match, "AXParent") {
-                    AX.perform(parent, kAXPressAction as String)
-                    Thread.sleep(forTimeInterval: 0.15)
-                    let retry = AX.perform(match, kAXPressAction as String)
-                    return jsonObject([
-                        "performed": .bool(retry == .success),
-                        "path": .array(traversed),
-                        "reason": retry == .success ? nil : .string("menu item did not respond: \(error.readableName)"),
-                    ])
-                }
                 return jsonObject([
-                    "performed": .bool(false),
-                    "path": .array(traversed),
-                    "reason": .string("menu item did not respond: \(error.readableName)"),
+                    "performed": .bool(error == .success),
+                    "path": .array(traversed + [.string(title)]),
+                    "reason": error == .success ? nil : .string("menu item did not respond: \(error.readableName)"),
                 ])
             }
-            // An intermediate item may be a submenu; open it to reach children.
-            guard let submenu = AX.element(match, kAXChildrenAttribute as String) else {
+
+            guard let menu = open(match) else {
+                if let opened = openedBarItem { AX.perform(opened, kAXPressAction as String) }
                 return jsonObject([
                     "performed": .bool(false),
-                    "traversed": .array(traversed),
-                    "reason": .string("menu item \"\(title)\" has no submenu"),
+                    "traversed": .array(traversed + [.string(title)]),
+                    "reason": .string("menu item \"\(title)\" did not open a menu"),
                 ])
             }
-            current = submenu
+            if openedBarItem == nil { openedBarItem = match }
+            traversed.append(.string(title))
+            container = menu
         }
         return jsonObject(["performed": .bool(false), "reason": .string("menu path was not resolved")])
     }
@@ -768,7 +785,16 @@ extension MacHost {
             return AppleEvents.open(url: url, bundleId: params.optionalString("bundleId"))
 
         case "reveal":
-            let path = try params.nonEmptyString("path")
+            // `path` is declared as an array because the `menu` action beside it
+            // needs one, and a model calling `reveal` sends the same shape. One
+            // path is what reveal means, so a longer list is a mistake rather
+            // than something to silently truncate.
+            let paths = try params.stringList("path")
+            guard paths.count == 1, let path = paths.first, !path.isEmpty else {
+                throw CuaError.invalidRequest(
+                    "app: action \"reveal\" needs exactly one non-empty path, received \(paths.count)"
+                )
+            }
             return AppleEvents.reveal(path: path)
 
         case "script":
@@ -784,8 +810,15 @@ extension MacHost {
             guard !path.isEmpty else {
                 throw CuaError.invalidRequest("the menu action requires a non-empty \"path\" of menu titles")
             }
-            _ = try menuAction(element: application, params: params)
-            return jsonObject(["requested": .bool(true), "path": .array(path.map { JSONValue.string($0) })])
+            // The outcome is returned rather than replaced by a fixed success.
+            // `menuAction` reports `performed: false` with a reason when the
+            // item does not exist or refuses to respond, and throwing that away
+            // made every menu call look like it had worked — the one answer a
+            // caller cannot check for itself.
+            let outcome = try menuAction(element: application, params: params)
+            guard var members = outcome.objectValue else { return outcome }
+            members["path"] = .array(path.map { JSONValue.string($0) })
+            return .object(members)
 
         default:
             throw CuaError.invalidRequest(
