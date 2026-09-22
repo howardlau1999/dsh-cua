@@ -1,0 +1,51 @@
+# This package's composition layer: the rows it contributes to a profile.
+#
+# Applied by the plugin manager once the package is installed as a bundle, so
+# the rows reach the composition without depending on how a profile resolves
+# bare module names.
+#
+# Computer Use: see and operate the macOS desktop — accessibility trees, screen
+# capture, synthesized input, and Apple events.
+#
+# The engine is a separate native helper. macOS attributes the Accessibility and
+# Screen Recording grants to the process responsible for it — the application
+# hosting the harness, not `cua-engine` — so those are the entries to enable in
+# System Settings. The `cua_status` tool reports what is missing and names the
+# application to enable.
+#
+# Update the two absolute paths below if this package is moved. They are
+# absolute on purpose: a packaged harness resolves bare package names against
+# its own installation, which cannot see a profile's node_modules, and an
+# absolute path is the one form that reaches a package living outside it.
+- insert:
+    # The engine also speaks the Model Context Protocol on stdio, so the
+    # harness's own MCP client exposes its catalog. Tools appear to a model as
+    # `mcp__cua__<name>`. This is the integration path the desktop application
+    # documents for providers that live outside its own installation.
+    - id: mcp-cua
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: cua
+        transport: stdio
+        command: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
+        args:
+          - --mcp
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+
+    # The same engine as a native plugin row, which registers `cua_*` tools
+    # directly. Both rows are carried because they exercise different loader
+    # paths; a composition that can only reach one of them still gets the tools.
+    - id: cua
+      name: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/index.js
+      config:
+        enginePath: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
+        # `always` asks through ctx.approval before every write; `session` asks
+        # once per write tool per session; `never` leaves the macOS grants as the
+        # only gate. In a session whose approval policy is `never`, a refused
+        # approval blocks the write outright, so `never` is the only usable
+        # setting there.
+        writeApproval: never
+        idleShutdownMs: 600000

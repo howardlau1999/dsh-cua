@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "description": "Computer Use for DeepSeek Harness: native macOS accessibility trees, screen capture, synthesized input, and Apple-event messaging as model tools",
   "license": "MIT",
-  "private": true,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -16,7 +15,10 @@
   "files": [
     "lib/index.js",
     "lib/types/**/*.d.ts",
-    "lib/bin/**"
+    "cordis.patch.yml",
+    "native/cua-engine/Package.swift",
+    "native/cua-engine/Sources/**/*.swift",
+    "scripts/**/*.mjs"
   ],
   "scripts": {
     "build": "node scripts/build-engine.mjs && node scripts/build-plugin.mjs",
@@ -40,5 +42,10 @@
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.9.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

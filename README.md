@@ -166,9 +166,28 @@ pnpm run smoke           # 端到端：加载插件 + 调用真实引擎
 pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有可见副作用）
 ```
 
-## 接入 harness（两种方式）
+## 安装（推荐：作为插件包安装）
 
-### 方式 A：MCP provider（推荐）
+这个包**声明了 `dsh.bundle`**，本身就是一个可被 DSH 插件管理器安装的组合包。在 DSH 的 **设置 → Plugins → Add plugin** 里填这个包的**绝对路径**：
+
+```
+/Users/hh.liu/code/cua/packages/dsh-plugin-cua
+```
+
+包内的 `cordis.patch.yml` 提供两行：
+
+| 行 | 作用 |
+|---|---|
+| `mcp-cua` | 通过 `@deepseek-ai/dsh-mcp-client` 接入引擎的 MCP server，工具形如 `mcp__cua__<name>` |
+| `cua` | 原生插件行，直接注册 `cua_*` 工具 |
+
+两行都带，是因为它们走不同的加载器路径——能通其中一条就能拿到工具。安装后需要重启。
+
+> 包若被移动到别处，改 `cordis.patch.yml` 里那两处绝对路径。用绝对路径是刻意的：打包版 harness 把裸包名解析到**自身安装目录**，看不到 profile 的 `node_modules`；绝对路径是唯一能触达安装目录之外的形式。
+
+## 手动接入（不用插件管理器时）
+
+### 方式 A：MCP provider
 
 引擎内置 MCP server 模式（`cua-engine --mcp`），通过 `dsh-mcp-client` 接入。工具在模型侧显示为 `mcp__cua__<name>`。
 
