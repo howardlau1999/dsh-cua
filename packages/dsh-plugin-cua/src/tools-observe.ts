@@ -130,6 +130,9 @@ function projectStatus(raw: Record<string, unknown>, tools: ToolContext): Status
     hint: report.hint,
     enginePath: tools.engine.executablePath,
     eligibleTools: eligibleTools(report),
+    // Absent on a backend that does not report elevation, so the key never
+    // appears in the value and the schema's optionality does the work.
+    ...(report.elevated === undefined ? {} : { elevated: report.elevated }),
   }
 }
 
@@ -147,6 +150,8 @@ interface StatusValue {
   hint: string
   enginePath: string
   eligibleTools: string[]
+  /** Present only where the backend reports it; see {@link PermissionReport}. */
+  elevated?: boolean
 }
 
 /** Output schema shared by `cua_status` and `cua_request_permissions`. */
@@ -166,6 +171,10 @@ const STATUS_SCHEMA = {
     hint: { type: 'string', required: true },
     enginePath: { type: 'string', required: true },
     eligibleTools: { type: 'array', items: { type: 'string' }, required: true },
+    // Deliberately not required: only the Windows backend reports elevation, and
+    // a required field would force macOS to invent a value for a boundary that
+    // does not exist there.
+    elevated: { type: 'boolean' },
   },
 } as const
 
@@ -187,20 +196,7 @@ function eligibleTools(report: PermissionReport): string[] {
 }
 
 /** Render the status report for a model. */
-function renderStatus(value: {
-  engineVersion: string
-  backend: string
-  platform: string
-  platformVersion: string
-  accessibility: boolean
-  screenRecording: boolean
-  ready: boolean
-  sessionLocked: boolean
-  missing: string[]
-  hint: string
-  enginePath: string
-  eligibleTools: string[]
-}): string {
+function renderStatus(value: StatusValue): string {
   const permission = (granted: boolean): string => granted ? 'granted' : 'MISSING'
   // The permission *names* are platform facts: a macOS user is looking for
   // "Accessibility" and "Screen Recording" in System Settings, while Windows has
@@ -216,9 +212,20 @@ function renderStatus(value: {
     `Engine binary: ${value.enginePath}`,
     '',
     value.ready ? `All permissions are granted and the screen is unlocked.` : value.hint,
-    '',
-    `Available with the current permissions: ${value.eligibleTools.join(', ')}.`,
   ]
+  // Elevation is not a permission and must not be rendered as one: an
+  // unelevated engine still has every permission granted, it simply cannot
+  // reach a window owned by an elevated process. Saying which case this is
+  // saves the model from reporting "input does not work" when the truth is
+  // "that window is out of reach".
+  if (value.elevated !== undefined) {
+    lines.push('', value.elevated
+      ? 'Engine elevation: running elevated, so windows owned by elevated processes are reachable too.'
+      : 'Engine elevation: standard token (not elevated). Input aimed at a window owned by an elevated '
+        + 'process is discarded by Windows (UIPI) and such a window\'s contents are withheld from the tree; '
+        + 'every other window is reachable.')
+  }
+  lines.push('', `Available with the current permissions: ${value.eligibleTools.join(', ')}.`)
   return lines.join('\n')
 }
 

@@ -4,11 +4,45 @@ State of the Computer Use plugin as of the work following commit `e56fa4f`, and
 what is left. Read [`docs/case-study-tool-visibility.md`](case-study-tool-visibility.md)
 first for why the integration looks the way it does.
 
+Machine-local companion: [`HANDOFF-desktop-profile.md`](HANDOFF-desktop-profile.md)
+(Chinese) records the profile the desktop application on this machine actually
+boots, what was installed into it, how to verify it after the next restart, and
+how to roll it back.
+
 ## Where things stand
 
 Working and verified: the Swift engine, the MCP server over it, the bundle, and
 the install path. The twelve tools reach a model as `cua_*` in a session created
 after the host booted.
+
+**The profile the tools reach is the profile the host boots, and on this machine
+that is `desktop`, not `web`.** The Electron application boots
+`~/.dsh/profiles/desktop` — read off the running host's own argv, not guessed —
+and the `web` profile that had been carrying the `cua` row is the CLI's, so a row
+installed there is loaded by nothing that ever serves a session from the
+application. The row now lives in the `desktop` profile, with the package linked
+into that profile's `node_modules`. `dsh --profile desktop …` and
+`dsh plugin --profile desktop …` both refuse outright (the launcher owns that
+name), so the link is made by hand and the patch is validated with
+`loadOverlayPatches` before it is written — the habit recorded at the end of this
+document, applied to the file that would otherwise take the application's boot
+with it.
+
+Verified on Windows against the packaged runtime (0.1.6-alpha.2, dsh
+0.1.6-alpha.2), not inferred: a throwaway profile built from the real
+`desktop` files composed the row, resolved the linked package, ran its `apply()`,
+and registered all twelve `cua_*` tools. `cua-engine.exe --probe` reports engine
+0.2.0, backend `windows-uia`, `accessibility`/`screenRecording` true, `ready`
+true, `elevated` false; `scripts/smoke.mjs` passes 68/68 against the real engine.
+
+**The application's own boot has since been verified, which closes the one step a
+hand edit could not rehearse.** After a full restart of the desktop application,
+a session created after that boot called all twelve `cua_*` tools — the model
+session, not a probe — and `cua_status` reported engine 0.2.0 on `windows-uia`
+with both permissions granted. The host's own argv names
+`C:\Users\howar\.dsh\profiles\desktop`, the linked package resolves inside it, and
+`validate-patch.mjs` accepts the row. The machine-local record of that run is
+[`HANDOFF-desktop-profile.md`](HANDOFF-desktop-profile.md).
 
 The bundle's row is the **native plugin row**, not the MCP one. A row that names
 the engine has to carry a path, and that path differs per platform — a directory
@@ -44,10 +78,18 @@ Test suites, all green:
 | `check-schemas.mjs` | 46 checks: every TypeScript tool's parameter and output schema, through the harness's own validator |
 | `check-mcp-catalog.mjs` | 128 checks: the twelve tools the engine publishes over MCP, validated the same way and compared against the TypeScript catalog |
 | `check-capture-deadline.mjs` | 5 checks: a wedged capture aborts the engine within its bound |
-| `smoke.mjs` | 51 checks: the built bundle loaded and every tool called against the real engine |
+| `smoke.mjs` | 51 checks when it was written, **68 today**: the built bundle loaded and every tool called against the real engine |
 | `smoke.mjs --write` | Adds pointer movement, key delivery, and background read/write with a focus assertion |
 
 `make check` runs the first five. `make smoke-writes` adds the last.
+
+Two numbers in the table above age, and were re-measured on the Windows machine
+rather than carried forward: `check-schemas.mjs` is still 46 checks and
+`check-mcp-catalog.mjs` still 128, but the smoke suite grew to 68 as tools gained
+assertions — most recently the three that hold `cua_status` to the elevation the
+engine actually reported. `scripts/check.mjs` skips the two macOS-only stages on
+Windows and says so — `all 4 stages passed (2 skipped on this platform)` — so a
+green `pnpm run check` on Windows is four suites, not six.
 
 ## 1. Exercise the tools through the model — **done**
 
@@ -211,7 +253,20 @@ Still open:
   row's registration path is asserted by `smoke.mjs`, but its *tool results* —
   text projection, image admission through the attachment store, the write gate's
   refusal wording — have never been seen from a macOS session. Open a new session
-  on the native row before trusting it there.
+  on the native row before trusting it there. **Windows has now had exactly that
+  exercise** (see §1), and the projection defect it turned up was Windows-specific
+  in its trigger, so this remains the one unverified surface.
+- **The status projection is a hand-maintained list, and it silently drops what
+  it does not name.** Windows reports `elevated`, `elevationAvailable`,
+  `backendDetail`, and `sessionId`; `toPermissionReport` kept the twelve fields
+  macOS also has, so a model on Windows could not see which side of the UIPI
+  boundary the engine was on while `cua_status`'s own hint text referred to
+  `elevated: false` as though the model could read it. `elevated` is now carried
+  through, optionally, and asserted three ways in `smoke.mjs`. The general form of
+  the trap remains: an additive engine field is invisible until someone reads the
+  projection, and no check compares the two shapes field by field. The other three
+  are still dropped — deliberately, since nothing consumes them, but the reason
+  they are dropped lives only in this paragraph.
 - **Windows is done**, and it was done on the native row: the C#/.NET engine
   implements all twelve methods and `--mcp`, `check-mcp-catalog.mjs` validates its
   catalog (128 checks), and the smoke test drives real windows. Linux is the one
@@ -240,14 +295,30 @@ already running inside the host.
 ## How to work in this repository
 
 ```sh
-make build          # Swift engine + bundled plugin
-make check          # engine unit tests, types, both catalogs, deadline, smoke
+make build          # the native engine for this platform + the bundled plugin
+make check          # every suite that applies here: see below
 make smoke-writes   # adds real pointer, key, and background-app assertions
 ```
 
+`make` prefers the harness's own Node and pnpm under
+`$DSH_HOME/dsh-runtimes/dsh-primary-runtime`, which is the toolchain the plugin is
+loaded by — but that runtime is installed on demand and is absent on a fresh
+machine, and MSYS resolves `$(HOME)` to `/home/<user>` rather than to the Windows
+profile, so the targets now fall back to `node` and `pnpm` from `PATH` instead of
+failing on a path that was never there. `pnpm run check`, `pnpm run typecheck`,
+`pnpm run smoke` and friends are the portable spellings; they are what the README
+lists.
+
+`pnpm run check` runs every stage that applies to the host. macOS runs six;
+Windows runs four — the Swift unit tests and the capture-wedge deadline both
+exercise macOS-only behaviour — and the summary says which:
+`all 4 stages passed (2 skipped on this platform)`. On this machine that is
+`check-schemas` 46/46, `check-mcp-catalog` 128/128, and `smoke` 68/68.
+
 The engine is usable without the harness, which is how it gets debugged. Note
 the path: the handoff previously printed `lib/bin/cua-engine`, which is wrong —
-it lives under the package.
+it lives under the package, and on Windows it is the directory
+`lib/bin/cua-engine/` holding `cua-engine.exe`.
 
 ```sh
 cd packages/dsh-plugin-cua
@@ -257,6 +328,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
               '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   | lib/bin/cua-engine --mcp
 ```
+
+The last three lines are the `--mcp` envelope and are platform-neutral; the
+`--call tree.dump` example names Finder, which on Windows would be
+`--params '{"app":"explorer"}'` (or any running application).
 
 Two habits this project earned the hard way:
 

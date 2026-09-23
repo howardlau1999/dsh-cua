@@ -349,6 +349,7 @@ Checks:
 ```sh
 pnpm run typecheck       # tsc --noEmit
 pnpm run check:schemas   # validate every tool's input/output schema with the harness's validator
+pnpm run validate:patch -- <cordis.patch.yml>   # validate a patch file with the harness's own loader, before it reaches a profile
 pnpm run smoke           # end-to-end: load the plugin and call the real engine
 pnpm run smoke:writes    # additionally moves the pointer and presses shift (visible side effects)
 ```
@@ -356,14 +357,15 @@ pnpm run smoke:writes    # additionally moves the pointer and presses shift (vis
 ## Install
 
 The package declares `dsh.bundle`, so the plugin manager can install it. In the
-application: **Settings → Plugins → Add plugin**, then the package's absolute
-directory:
+application: the sidebar's **Plugins** page (`ui-plugin-manager`) — the list under
+Settings → Plugins is read-only — then the package's absolute directory:
 
 ```
 /path/to/packages/dsh-plugin-cua
 ```
 
-The manager adds it as a bundle layer of the chosen profile, and the package's
+The manager installs into the **current profile**, which is the one the
+application boots, and adds the package there as a bundle layer. The package's
 `cordis.patch.yml` contributes one row: the plugin itself, with the engine
 resolved from inside the package. There is no path to edit, and that is the
 point — an absolute path would be wrong on every machine but the one it was
@@ -387,17 +389,44 @@ for the full diagnosis, including the four wrong conclusions reached before it.
 
 ### Manual wiring, without the plugin manager
 
-Install the package into a profile yourself:
+**First establish which profile to install into.** Every directory under
+`~/.dsh/profiles/` is a profile and the desktop application boots exactly one of
+them. A plugin installed into another one loads perfectly, registers all twelve
+tools and is never reached — and because the failure is "the tools do not exist",
+it looks exactly like a plugin that failed to load. Read the answer off the
+running host process rather than guessing:
 
-1. Put it in the profile's dependencies (`~/.dsh/profiles/web/package.json`):
+- Windows: `Get-NetTCPConnection -LocalPort 19387 -State Listen |
+  Select-Object -ExpandProperty OwningProcess` for the pid, then
+  `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>" |
+  Select-Object -ExpandProperty CommandLine` — the profile directory is the
+  argument after the packaged dsh directory on the `dsh-desktop-host` command
+  line (that process's `process.argv[3]`). Measured on the machine this
+  repository was last built on: `C:\Users\howar\.dsh\profiles\desktop`.
+- macOS: `lsof -p <host pid> | grep profiles`.
+
+`dsh --profile desktop …` is refused on both platforms (`profile "desktop" is
+managed exclusively by the Electron application`), so this answer can only come
+from the process, never from the CLI.
+
+Then install the package into that profile yourself:
+
+1. Put it in the profile's dependencies
+   (`~/.dsh/profiles/<profile>/package.json`):
 
    ```json
    { "dependencies": { "@deepseek-ai/dsh-plugin-cua": "link:/path/to/cua/packages/dsh-plugin-cua" } }
    ```
 
-   Then run `dsh plugin install` (or `pnpm install`) in the profile directory.
+   Then run `dsh plugin --profile <profile> add <package path>` — the same pnpm
+   forwarder the plugin manager uses, run in the profile directory. When the
+   profile is the application's own (`desktop`, which the CLI refuses), make the
+   link yourself instead: `node_modules/@deepseek-ai/dsh-plugin-cua` pointing at
+   the package directory, matching how that profile links everything else. The
+   application only removes links aimed at its own older projection directory
+   (`.dsh-module-fallback`) on startup, so a hand-made link survives.
 
-2. Append to `~/.dsh/profiles/web/cordis.patch.yml`:
+2. Append to `~/.dsh/profiles/<profile>/cordis.patch.yml`:
 
    ```yaml
    - insert:
@@ -415,8 +444,9 @@ Install the package into a profile yourself:
    `lib/bin/cua-engine` on macOS. Set `enginePath` only to point somewhere else,
    such as a build straight out of the source tree.
 
-3. Restart the harness. Both the engine path and the system grants are fixed at
-   startup.
+3. Restart the harness and open a new session. The row is applied at boot, and on
+   macOS the engine path and the system grants are fixed then too; Windows has no
+   grants to fix, but the boot is what registers the tools.
 
 `writeApproval` gates writes on top of whatever the operating system already
 enforces: `always` asks before every write, `session` asks once per write tool per
@@ -491,7 +521,12 @@ the session is unlocked.
 
 The one real limit is **elevation**, and getting it right took measuring. The
 intuitive model — "Windows refuses and tells you" — is wrong on both halves.
-Measured against an administrator-elevated Notepad, from an unelevated engine:
+`cua_status` carries `elevated` as its own field on this backend, so the model can
+tell which side of the integrity boundary the engine is on *before* a window turns
+out to be out of reach. It is deliberately absent on macOS, where no such boundary
+exists between two processes of the same user: a `false` invented there would read
+as a measurement. Measured against an administrator-elevated Notepad, from an
+unelevated engine:
 
 | Operation | Result |
 |---|---|

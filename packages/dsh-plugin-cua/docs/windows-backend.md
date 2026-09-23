@@ -14,11 +14,13 @@ packages/dsh-plugin-cua/
 │   └── src/
 │       ├── Program.cs        # STA entry point, stdio loop, CLI
 │       ├── Protocol.cs       # request/response envelope, error vocabulary
+│       ├── McpServer.cs      # the second envelope: MCP over the same dispatch
 │       ├── Params.cs         # strict typed parameter access
 │       ├── PlatformHost.cs   # the backend interface + dispatch
 │       ├── Json.cs
 │       └── Win/
 │           ├── Native.cs         # Win32 / DWM / GDI / shell interop
+│           ├── Native.Input.cs   # SendInput, PostMessage, cursor read-back
 │           ├── Discovery.cs      # displays, windows, processes
 │           ├── Keymap.cs         # key names → virtual keys
 │           ├── WinHost.cs        # permissions, displays, apps, windows
@@ -586,8 +588,15 @@ build:
 
 ```powershell
 Get-FileHash lib\bin\cua-engine\cua-engine.exe -Algorithm SHA256
-# current build: 4278B9B8F872B4967412CB9D471434864D99297288299A43359CD39A40C3E70C
+# the build this document was last measured against:
+# 8632D404B1AD57A52B911597E631881B5D28655E48F582EEB74B43302F6FE1F1
 ```
+
+The hash is per build — a rebuild changes it, and it changed between the two
+Windows builds measured here — so treat the line above as a record of the
+artifact the measurements in this document describe, not as a value to compare
+against. What a reader can actually check is where the binary came from: this
+repository, at the commit they checked out, through `pnpm run build:engine`.
 
 **If you add a Defender exclusion, add it to the build output, not to `%TEMP%`.**
 Excluding a temporary directory is how malware persists; excluding

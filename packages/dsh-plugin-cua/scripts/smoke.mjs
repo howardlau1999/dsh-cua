@@ -14,6 +14,7 @@
  * @module
  */
 
+import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
@@ -127,12 +128,70 @@ async function callTool(definitions, name, args, options = {}) {
       throw new Error(`${name} returned a value its own output schema rejects: ${errors.join('; ')}`)
     }
   }
-  return { definition, value }
+  // The prose a model actually reads. Rendering is a separate layer from the
+  // canonical value, so a fact present in one can be absent from the other —
+  // which is the failure the elevation checks below exist to catch.
+  const blocks = definition.output.render(args, value) ?? []
+  const rendered = blocks.map(block => block?.text ?? '').join('\n')
+  return { definition, value, rendered }
+}
+
+const ENGINE_PATH = WINDOWS
+  ? join(packageRoot, 'lib', 'bin', 'cua-engine', 'cua-engine.exe')
+  : join(packageRoot, 'lib', 'bin', 'cua-engine')
+
+/**
+ * Ask the engine directly for its status report.
+ *
+ * The tools go through the plugin's own client, which is what the other checks
+ * cover. This is for the handful of assertions that compare a tool's output
+ * against the engine's raw answer: without the raw side, "the projection carries
+ * the field" and "the projection drops the field" are indistinguishable, because
+ * both produce a plausible-looking report.
+ *
+ * @returns the `result` object of `engine.status`, or `{}` when unavailable.
+ */
+async function engineStatus() {
+  return new Promise(resolvePromise => {
+    let child
+    try {
+      child = spawn(ENGINE_PATH, ['--mcp'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    } catch {
+      resolvePromise({})
+      return
+    }
+    let stdout = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      resolvePromise({})
+    }, 10_000)
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.on('error', () => { clearTimeout(timer); resolvePromise({}) })
+    child.on('close', () => {
+      clearTimeout(timer)
+      for (const line of stdout.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed === '') continue
+        try {
+          const message = JSON.parse(trimmed)
+          if (message.id === 2) {
+            // `tools/call` answers with a text block holding the engine's JSON.
+            const body = message.result?.content?.[0]?.text
+            resolvePromise(typeof body === 'string' ? JSON.parse(body) : {})
+            return
+          }
+        } catch { /* not a frame we asked for */ }
+      }
+      resolvePromise({})
+    })
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } })}\n`)
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'cua_status', arguments: {} } })}\n`)
+    child.stdin.end()
+  })
 }
 
 process.stdout.write('dsh-plugin-cua smoke test\n')
-
-// ---------------------------------------------------------------- load plugin
 
 const entry = join(packageRoot, 'lib', 'index.js')
 if (!existsSync(entry)) {
@@ -185,7 +244,7 @@ for (const definition of definitions) {
 // ------------------------------------------------------------- engine status
 
 process.stdout.write('\nengine and permissions\n')
-const { value: status } = await callTool(definitions, 'cua_status', {})
+const { value: status, rendered: statusText } = await callTool(definitions, 'cua_status', {})
 check(typeof status.engineVersion === 'string', 'cua_status reports an engine version', status.engineVersion)
 check(typeof status.accessibility === 'boolean', 'cua_status reports Accessibility state', String(status.accessibility))
 check(typeof status.screenRecording === 'boolean', 'cua_status reports Screen Recording state', String(status.screenRecording))
@@ -194,6 +253,46 @@ check(
   status.eligibleTools.includes('cua_tree') === status.accessibility,
   'cua_status lists cua_tree only when Accessibility is granted',
 )
+
+// Elevation is not a permission, and the plugin used to drop it on the floor:
+// the Windows engine reports it because UIPI discards input aimed at an elevated
+// window and withholds that window's contents from a tree, while the projection
+// kept only the twelve fields macOS also has. A model then saw a tree that was
+// silently short of a window, with nothing in the report to explain it. The
+// check is platform-split because the field is: macOS has no integrity boundary
+// between two processes of the same user, so it reports nothing and the schema's
+// optionality is what keeps that honest.
+const elevationLine = (await engineStatus()).permissions?.elevated
+if (WINDOWS) {
+  check(
+    typeof elevationLine === 'boolean',
+    'the Windows engine reports elevation in its status payload',
+    JSON.stringify(elevationLine),
+  )
+  check(
+    status.elevated === elevationLine,
+    'cua_status carries the elevation the engine reported',
+    `tool ${String(status.elevated)} vs engine ${String(elevationLine)}`,
+  )
+  // The value is only useful if the model can read it: the canonical value is
+  // one projection away from the text a model actually receives.
+  check(
+    /elevat/i.test(statusText),
+    'cua_status renders the elevation it carries',
+    statusText,
+  )
+} else {
+  check(
+    elevationLine === undefined,
+    'a backend without an integrity boundary reports no elevation',
+    JSON.stringify(elevationLine),
+  )
+  check(
+    status.elevated === undefined,
+    'cua_status invents no elevation where none was reported',
+    String(status.elevated),
+  )
+}
 
 // The other half of the permission surface, and the only tool whose side effect
 // is a system dialog. With the permissions already granted macOS raises nothing,

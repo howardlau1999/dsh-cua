@@ -126,6 +126,18 @@ export interface PermissionReport {
   hint: string
   executablePath: string
   processId: number
+  /**
+   * Whether the engine holds an elevated token, when the backend reports it.
+   *
+   * Windows-only, and optional on purpose: macOS has no equivalent — there is no
+   * integrity boundary between two processes owned by the same user — so the
+   * field is absent there rather than defaulted to a value that would read as a
+   * measurement. Windows reports it because UIPI silently discards input aimed
+   * at an elevated window and withholds that window's contents from a tree, and
+   * "the window cannot be reached" is a very different report to the user than
+   * "the engine is broken".
+   */
+  elevated?: boolean
 }
 
 /** Normalize a permission report. */
@@ -142,6 +154,11 @@ export function toPermissionReport(value: unknown): PermissionReport {
     hint: str(row.hint),
     executablePath: str(row.executablePath),
     processId: num(row.processId, -1),
+    // Carried through only when the backend actually reported it. `bool()` would
+    // turn macOS's absent field into `false`, which is indistinguishable from a
+    // measured "not elevated" and would put a Windows-only claim in a macOS
+    // report.
+    ...(typeof row.elevated === 'boolean' ? { elevated: row.elevated } : {}),
   }
 }
 

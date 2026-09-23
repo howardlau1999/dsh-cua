@@ -37,6 +37,28 @@ This is not specific to this package. Anything mounted at the **profile** or
 
 **First thing to try when tools appear to be missing: open a new session.**
 
+## The same symptom, a second cause
+
+A new session does not always fix it, and there is one other failure that looks
+identical: **the row was installed into a profile the host does not boot.**
+
+`~/.dsh/profiles/` holds several profiles and the desktop application boots
+exactly one of them — on the machine this was last diagnosed on, `desktop`, while
+the `cua` row sat in `web`, which only the CLI opens. That row was loaded by
+nothing that ever served a session from the application, so no number of new
+sessions could have surfaced the tools. It was found by reading the profile
+directory out of the running host process's own command line — it follows the
+packaged dsh directory there — rather than from the file that had been edited.
+
+Two details make this trap easy to fall into. Every profile under that directory
+is a real, valid, loadable profile, so an install into the wrong one succeeds
+completely. And `dsh --profile desktop …` — including `plugin --profile desktop`
+— is refused by the launcher on every platform, so the obvious tool for asking
+"what is this profile running?" is unavailable exactly when the question matters.
+
+**Checklist item for this cause: the row and the package must be in the profile
+the running host boots, which is read from the host process, not from memory.**
+
 ## Two real defects found on the way
 
 The investigation was not wasted — it surfaced two genuine problems, one of
@@ -154,12 +176,20 @@ so the tools had been there all along.
 
 **`loadOverlayPatches` for validating a patch layer.** A YAML file that parses is
 not a patch the loader will accept. The harness's own loader is the only thing
-whose agreement means anything, and it is callable directly:
+whose agreement means anything, and it is callable directly — the package ships
+that call as a script, so the habit costs nothing to follow:
+
+```
+node packages/dsh-plugin-cua/scripts/validate-patch.mjs <path/to/cordis.patch.yml>
+```
 
 ```js
 const { loadOverlayPatches } = await import('.../app-boot/lib/index.js')
 const patches = loadOverlayPatches('dsh', '/path/to/cordis.patch.yml')
 ```
+
+It reports the document count and the rows the patch contributes, and exits
+non-zero with the loader's own message when the file is not one patch document.
 
 A string check for the plugin name is not a validation. That mistake was made
 once too: a patch file containing two YAML documents passed a
@@ -170,13 +200,17 @@ profile configuration.
 
 1. **Open a new session.** If the tools appear, the session was older than the
    host boot and nothing is wrong.
-2. **Check the package declares `dsh.bundle`** — without it the plugin manager
+2. **If they do not, check the profile.** Read the profile directory out of the
+   running host's command line and confirm the row and the package are there. A
+   correct install into a profile the host does not boot fails exactly like a
+   broken install.
+3. **Check the package declares `dsh.bundle`** — without it the plugin manager
    refuses to install it, before any code runs.
-3. **Confirm exactly one integration path.** Two working rows means two
+4. **Confirm exactly one integration path.** Two working rows means two
    identical catalogs.
-4. **Read `ctx.tools.schemas(agent)`, not your own tool list.**
-5. **Validate patches with `loadOverlayPatches`, not with string matching.**
-6. **Restart after installing.** Rows are applied at boot.
+5. **Read `ctx.tools.schemas(agent)`, not your own tool list.**
+6. **Validate patches with `loadOverlayPatches`, not with string matching.**
+7. **Restart after installing.** Rows are applied at boot.
 
 ## What this package settled on
 

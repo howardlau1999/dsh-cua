@@ -218,21 +218,22 @@ pnpm run build:engine
 ```sh
 pnpm run typecheck       # tsc --noEmit
 pnpm run check:schemas   # 用 harness 的校验器验证每个工具的入参/出参 schema
+pnpm run validate:patch -- <cordis.patch.yml>   # 用 harness 自己的加载器验证一个 patch 文件（写进 profile 之前）
 pnpm run smoke           # 端到端：加载插件 + 调用真实引擎
 pnpm run smoke:writes    # 额外移动一次指针、按一次 shift（会有可见副作用）
 ```
 
 ## 安装（作为插件包安装）
 
-这个包**声明了 `dsh.bundle`**，本身就是一个可被 DSH 插件管理器安装的组合包。在 DSH 的 **设置 → Plugins → Add plugin** 里填这个包的**绝对路径**：
+这个包**声明了 `dsh.bundle`**，本身就是一个可被 DSH 插件管理器安装的组合包。在应用的**左侧栏 Plugins 页**（`ui-plugin-manager`；「设置 → Plugins」那个列表是只读的）里填这个包的**绝对路径**：
 
 ```
 /path/to/packages/dsh-plugin-cua
 ```
 
-插件管理器会把它加成 profile 的一个 bundle 层，包内的 `cordis.patch.yml` 提供**一行**：插件本身，而引擎由插件在包内自行解析。**这一行里没有任何需要改的路径**——绝对路径在除作者那台机器以外的每台机器上都是错的；而且一条路径也不可能同时对两个平台成立（Windows 的引擎是目录 `lib/bin/cua-engine/cua-engine.exe`，macOS 的引擎是单文件 `lib/bin/cua-engine`）。
+插件管理器会把它装进**当前 profile**——也就是这个应用正在启动的那个 profile——并把它加成 profile 的一个 bundle 层；包内的 `cordis.patch.yml` 提供**一行**：插件本身，而引擎由插件在包内自行解析。**这一行里没有任何需要改的路径**——绝对路径在除作者那台机器以外的每台机器上都是错的；而且一条路径也不可能同时对两个平台成立（Windows 的引擎是目录 `lib/bin/cua-engine/cua-engine.exe`，macOS 的引擎是单文件 `lib/bin/cua-engine`）。
 
-安装后**重启应用**，并且在**新建的会话**里使用——见下方"已知行为"。
+装完之后**重启应用**，并且在**新建的会话**里使用——见下方"已知行为"。
 
 ### 已知行为：工具在既有会话中不可见
 
@@ -284,7 +285,12 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
 
 
 
-> **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、12 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。用 `lsof -p <宿主 pid> | grep profiles` 读出真实答案，别猜。
+> **先确认要装进哪个 profile。** `~/.dsh/profiles/` 下每个目录是一个 profile，桌面应用只启动其中一个。装错的那个会被完整加载、12 个工具全部注册，但永远不会被用到——而失败表现是"工具不存在"，和一个加载失败的插件完全一样。别猜，从**正在跑的那个宿主进程**读出真实答案：
+>
+> - Windows：`Get-NetTCPConnection -LocalPort 19387 -State Listen | Select-Object -ExpandProperty OwningProcess` 拿到 pid，再 `Get-CimInstance Win32_Process -Filter "ProcessId=<pid>" | Select-Object -ExpandProperty CommandLine`——profile 目录就在 `dsh-desktop-host` 命令行里紧跟着打包的 dsh 目录（该进程的 `process.argv[3]`）。实测本机是 `C:\Users\howar\.dsh\profiles\desktop`。
+> - macOS：`lsof -p <宿主 pid> | grep profiles`。
+>
+> `dsh --profile desktop …` 在两个平台上都会被拒绝（`profile "desktop" is managed exclusively by the Electron application`），所以这条判断只能来自进程本身，不能来自 CLI。
 
 1. 把包放进 profile 的依赖里（`~/.dsh/profiles/<profile>/package.json`）：
 
@@ -292,7 +298,7 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
    { "dependencies": { "@deepseek-ai/dsh-plugin-cua": "link:/path/to/cua/packages/dsh-plugin-cua" } }
    ```
 
-   然后在 profile 目录执行 `dsh plugin install`（或 `pnpm install`）。若该 profile 由桌面应用管理、`dsh` 拒绝操作，直接建符号链接即可（`node_modules/@deepseek-ai/dsh-plugin-cua` → 包目录），与 profile 既有的链接方式一致。
+   然后在 profile 目录执行 `dsh plugin --profile <profile> add <包路径>`（等于在该 profile 目录里跑 `pnpm add`；插件管理器与它共用同一套包操作）。若该 profile 由桌面应用管理（名字就是 `desktop`，CLI 会直接拒绝），直接建符号链接即可——`node_modules/@deepseek-ai/dsh-plugin-cua` 指向包目录（junction 也行），与 profile 既有的链接方式一致。桌面应用启动时只会清理指向它自己旧链接目录（`.dsh-module-fallback`）的链接，手工建的链接不受影响。
 
 2. 在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 追加：
 
@@ -310,7 +316,7 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
 
    `enginePath` 可以省略：插件会先找包内的引擎（macOS 是 `lib/bin/cua-engine`，Windows 是 `lib/bin/cua-engine/cua-engine.exe`），再找源码树里的调试构建。
 
-3. 重启 harness（引擎二进制路径与系统授权都在启动时确定）。
+3. 重启 harness，并新建会话：这一行是启动时应用的（macOS 上引擎二进制路径与系统授权也在那时定下来；Windows 没有授权要定，但工具同样只在启动时注册）。
 
 ## 权限（macOS）
 
@@ -327,7 +333,7 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
 - 授权按 **responsible process** 归属，**不是按二进制**。实测：把同一个引擎复制成一个从未被授权过的全新文件名，它立刻报告的仍是 `true`——因为授权跟着"谁拉起了它"，而不是跟着可执行文件本身。推论有三条，都很实用：
   - **重建/移动引擎不会丢权限**（每次 `swift build` 的 cdhash 都不同，若按二进制归属就永远无法满足）。
   - **要在系统设置里勾选的是宿主应用**（你的情况是 `DeepSeek Harness`），不是 `cua-engine`，也不是你启动它的终端。
-  - **从终端直接跑引擎，截图一定失败**。这条不是 bug，是同一套归属规则的另一面：终端拉起的引擎没有宿主应用的授权，而失败形态很隐蔽——ScreenCaptureKit 既不返回也不抛错，只是不再应答。所以 `lib/bin/cua-engine --call capture.screenshot` 这类手工验证**只能验证控件树和窗口，不能验证截图**；截图要在宿主里通过工具调用验证，`make smoke` 也因此默认跳过截图断言（`DSH_CUA_CAPTURE=1` 可强制打开）。
+  - **从终端直接跑引擎，截图一定失败**。这条不是 bug，是同一套归属规则的另一面：终端拉起的引擎没有宿主应用的授权，而失败形态很隐蔽——ScreenCaptureKit 既不返回也不抛错，只是不再应答。所以 `lib/bin/cua-engine --call capture.screenshot` 这类手工验证**只能验证控件树和窗口，不能验证截图**；截图要在宿主里通过工具调用验证。这是 macOS 独有的问题：Windows 上截图走 GDI，终端里跑的引擎一样能截，所以 `make smoke` 只在 macOS 上默认跳过截图断言（`DSH_CUA_CAPTURE=1` 可强制打开）。
 - `cua_status` 的提示会直接说出宿主应用名和 pid，照着它给的路径勾选即可。系统设置的列表里如果找不到该应用，用 `+` 从 `/Applications` 添加。
 - 修改授权后必须**退出并重启**宿主应用才生效——macOS 只在进程启动时读取授权状态。
 - 未授权时工具不会静默返回空结果：`window.list` / `tree.dump` 会显式报 `permission_denied`（否则 AX 会返回空属性集，看起来像"这台机器上没有窗口"）。
@@ -337,7 +343,7 @@ MCP 模式下截图由引擎写盘并返回路径（MCP 客户端只把结果投
 
 **没有需要授予的东西。** Windows 把 UI Automation、屏幕捕获、输入合成都开放给每个进程：没有辅助功能开关，没有屏幕录制弹窗，`cua_status` 也没有可以让用户去打开的设置页。它就是这么如实报告的——`accessibility` 与 `screenRecording` 在会话未锁定时恒为 `true`。
 
-唯一的真实限制是**提权**。这一点实测过（对着一个管理员权限的记事本，从未提权的引擎）：
+唯一的真实限制是**提权**。引擎在 `cua_status` 里为此单列一个 `elevated` 字段，让模型在撞上"这个窗口够不到"**之前**就知道自己站在完整性边界的哪一边。macOS 上这个字段**刻意不出现**：同一个用户的两个进程之间没有这条边界，凭空填一个 `false` 会被当成实测值。实测结论如下（对着一个管理员权限的记事本，从未提权的引擎）：
 
 | 操作 | 结果 |
 |---|---|
