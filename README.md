@@ -452,6 +452,7 @@ macOS 上 `smoke:writes` 会真的启动 TextEdit、把前台让给别的应用�
 ## 下一步
 
 交接文档：[docs/HANDOFF.md](docs/HANDOFF.md)——待办清单、未验证的代码路径、以及每项的判断依据。
+macOS 待办：[docs/HANDOFF-macos-native-row.md](docs/HANDOFF-macos-native-row.md)——native 行的工具结果从未在 macOS 的模型会话里出现过；这份是在 macOS 上把它验完的步骤与回报清单。
 排查记录：[docs/case-study-tool-visibility.md](docs/case-study-tool-visibility.md)。
 
 ## 已知限制

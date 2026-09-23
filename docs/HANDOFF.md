@@ -9,6 +9,11 @@ Machine-local companion: [`HANDOFF-desktop-profile.md`](HANDOFF-desktop-profile.
 boots, what was installed into it, how to verify it after the next restart, and
 how to roll it back.
 
+The macOS counterpart is [`HANDOFF-macos-native-row.md`](HANDOFF-macos-native-row.md):
+the native row's tool results have never been seen from a macOS model session, and
+that document is the procedure for producing them, including the three checks that
+only such a session can perform.
+
 ## Where things stand
 
 Working and verified: the Swift engine, the MCP server over it, the bundle, and
@@ -256,6 +261,9 @@ Still open:
   on the native row before trusting it there. **Windows has now had exactly that
   exercise** (see §1), and the projection defect it turned up was Windows-specific
   in its trigger, so this remains the one unverified surface.
+  [`HANDOFF-macos-native-row.md`](HANDOFF-macos-native-row.md) is the procedure for
+  closing it: what is already verified, what only a macOS model session can show,
+  the exact commands, and what to report back.
 - **The status projection is a hand-maintained list, and it silently drops what
   it does not name.** Windows reports `elevated`, `elevationAvailable`,
   `backendDetail`, and `sessionId`; `toPermissionReport` kept the twelve fields

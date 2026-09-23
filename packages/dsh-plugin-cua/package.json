@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-plugin-cua",
   "version": "0.1.0",
-  "description": "Computer Use for DeepSeek Harness: native macOS accessibility trees, screen capture, synthesized input, and Apple-event messaging as model tools",
+  "description": "Computer Use for DeepSeek Harness: native macOS and Windows accessibility trees, screen capture, synthesized input, and application control as model tools",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

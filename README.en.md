@@ -708,6 +708,19 @@ closes it and restores the previous foreground window; the background-typing
 assertion is macOS-only and Windows prints an explicit note saying why — Windows
 has no way to post keystrokes to a process.
 
+## Handoffs
+
+- [`docs/HANDOFF.md`](docs/HANDOFF.md) — project state, the test suites, and every
+  open item with the evidence behind it.
+- [`docs/HANDOFF-macos-native-row.md`](docs/HANDOFF-macos-native-row.md) — the
+  native plugin row's tool *results* have never been seen from a macOS model
+  session. That document is how to produce them, and what to report back.
+- [`docs/HANDOFF-desktop-profile.md`](docs/HANDOFF-desktop-profile.md) — the
+  Windows machine's record of the same exercise, plus its profile and rollback
+  (Chinese; machine-local).
+- [`docs/case-study-tool-visibility.md`](docs/case-study-tool-visibility.md) — why
+  "the tools are missing" usually means "open a new session".
+
 ## Known limitations
 
 - **Only the macOS and Windows backends exist.** Other platforms load the plugin,
