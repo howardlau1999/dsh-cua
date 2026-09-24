@@ -463,6 +463,50 @@ used to verify capture by hand; trees, windows, and app lists are unaffected.
 `make smoke` skips the capture assertions unless `DSH_CUA_CAPTURE=1` says it is
 already running inside the host.
 
+## Installing into another machine's application
+
+The manifest now describes what that takes, which it did not before. Three things
+have to be true on the new machine, and two of them used to be impossible to
+satisfy from the published metadata alone:
+
+1. **The package has to come from a path, not a registry.** `@deepseek-ai/dsh-plugin-cua`
+   is not published (the registry answers 404 for it), and the application's plugin
+   manager resolves a local install by *absolute path* (`install-spec.ts` refuses a
+   relative one). Clone this repository on that machine and point Add-plugin at
+   `packages/dsh-plugin-cua`.
+2. **The engine has to be built there.** `lib/bin/**` is in `files` now, so a
+   packed tarball carries the engine the plugin looks for — but a checkout carries
+   sources, so a fresh machine needs `pnpm install && pnpm run build` once, with
+   the Swift toolchain on macOS or the .NET 9 SDK on Windows. Both platforms'
+   sources ship for that reason: the Windows project was previously absent from
+   `files` altogether, while the Swift sources were present, so a Windows user
+   unpacking the package could not have built an engine at all.
+3. **Its peers have to resolve.** The bundle imports `@deepseek-ai/dsh-tools` and
+   `@deepseek-ai/schemastery` at runtime, and the manifest used to declare all
+   three of its dependencies as peers on `^0.1.5-rc.1` — a version line that
+   **no host has ever had**: the app ships cordis 4.0.2, `dsh-tools` 0.1.6-alpha.2
+   and schemastery 3.18.2, and semver refuses `0.1.6-alpha.2` against
+   `^0.1.5-rc.1` (a prerelease only satisfies a range when a comparator with the
+   *same* major.minor.patch carries one). The plugin only worked on this machine
+   because `node_modules/@deepseek-ai/{cordis,dsh-tools}` are hand-made `link:`
+   entries into a sibling harness checkout; the plugin manager does no peer
+   handling of its own, so on a clean machine nothing would have supplied them and
+   the import would have failed before `apply()` ran. The manifest now says what
+   the ecosystem actually is: `schemastery` is a **dependency** on the 3.18 line
+   (as the harness's own published plugins declare it), `cordis` a peer on `^4.0.2`,
+   and `dsh-tools` a peer on the union of the lines in use —
+   `^0.1.5-rc.1 || ^0.1.6-alpha.2 || ^0.1.7-alpha.1` — because no single caret range
+   spans prerelease tuples, which is a property of semver rather than of this
+   package.
+
+The `schemastery` range stops below 3.18.4 on purpose. 3.18.4 tightened
+`.default()`'s typing — its result is marked required and the meta type widens to
+`T | Volatile<T>` — which the `z<Config>` annotation in `src/config.ts` does not
+satisfy under `exactOptionalPropertyTypes`; `pnpm run typecheck` fails against it,
+and that failure is a stage of this repository's green. The difference is
+type-only, so a host that provides 3.18.4 at runtime still loads this bundle; the
+range names the line the source compiles against and that the shipping hosts carry.
+
 ## How to work in this repository
 
 ```sh

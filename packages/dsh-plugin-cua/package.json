@@ -15,9 +15,13 @@
   "files": [
     "lib/index.js",
     "lib/types/**/*.d.ts",
+    "lib/bin/**",
     "cordis.patch.yml",
     "native/cua-engine/Package.swift",
     "native/cua-engine/Sources/**/*.swift",
+    "native/cua-engine-win/CuaEngine.csproj",
+    "native/cua-engine-win/app.manifest",
+    "native/cua-engine-win/src/**/*.cs",
     "scripts/**/*.mjs"
   ],
   "scripts": {
@@ -35,14 +39,12 @@
     "smoke:writes": "node scripts/smoke.mjs --write"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^0.1.5-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1",
-    "@deepseek-ai/schemastery": "^0.1.5-rc.1"
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-tools": "^0.1.5-rc.1 || ^0.1.6-alpha.2 || ^0.1.7-alpha.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "link:../../../deepseek-harness/vendor/cordis",
     "@deepseek-ai/dsh-tools": "link:../../../deepseek-harness/packages/core/tools",
-    "@deepseek-ai/schemastery": "link:../../../deepseek-harness/vendor/schemastery",
     "@types/node": "^22.10.0",
     "esbuild": "^0.24.0",
     "typescript": "^5.9.0"
@@ -51,5 +53,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": ">=3.18.1 <3.18.4"
   }
 }
