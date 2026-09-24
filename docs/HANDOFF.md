@@ -284,6 +284,13 @@ someone will read it:
 - **One further limit, invisible from outside.** Even with the harness present,
   the macOS half of `smoke` could not exercise its permission-gated checks:
   Accessibility and Screen Recording cannot be granted to a runner.
+- **First run, measured.** [Run
+  1](https://github.com/howardlau1999/dsh-cua/actions/runs/35983459710) on
+  GitHub's own runners: both jobs green. macOS took 1m57s — engine build 57s, the
+  34 unit tests 38s, the deadline check 13s — and Windows 50s, of which the .NET
+  engine build was 29s. That Windows job is the half that could not be rehearsed
+  locally, so it is also the first time the C# engine has been built anywhere but
+  this machine.
 
 ## 4. Engine work
 
