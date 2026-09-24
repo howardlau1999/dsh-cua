@@ -315,6 +315,54 @@ Still open:
   `--probe` reports engine **0.2.0** on macOS, and it reports **0.1.0**. The two
   backends carry independent versions by design — `engine-contract.md` has said
   so all along — so the engine was right and the prose was wrong.
+
+  **The GUI host has since run the same exercise, after the restart this list was
+  waiting for** — §10 of the macOS document records it. Measured: the host booted
+  at 11:36:31 and the session that called the tools was created at 11:36:34, so
+  the row it saw came from that boot; the catalog was the twelve `cua_*` tools
+  with no `mcp__cua__*`, and exactly one `cua` row (the profile's patch
+  `documents: 0`, the package's `documents: 1`). `cua_status` reproduced §9's
+  report byte for byte with zero `/elevat/i` matches, and `cua_displays`,
+  `cua_tree`, and `cua_element action=list` all behaved. The write gate refused
+  again with §9's wording — and §9's explanation of *why* turned out to be wrong
+  in the one way worth carrying forward: the refusal was **not** "nobody to ask".
+  A `never` approval policy short-circuits the ask before any answerer is
+  dispatched, and every session on this machine was seeded with it
+  (`~/.dsh/settings.yaml` had `permission.defaultPreset: danger-full-access`, and
+  the base bundle pairs that preset with `approval: never`). The GUI session's own
+  log carries `permission/preset {"preset":"danger-full-access"}` +
+  `approval/policy {"policy":"never"}`, and §9's headless log
+  (`session-17a7a47b-…`) carries the same two events — so GUI and headless
+  matched for one reason, and the refusal wording identifies neither who was asked
+  nor whether anyone was. **The gate is now confirmed in the positive direction
+  too**: in a session whose policy is `ask` (`session-5271d134`, opened after the
+  relaunch), `cua_click` raised a prompt and the approval came back
+  `{"outcome":"allowed-once"}` — the whole of §4's item 3, both halves.
+
+  An attempt to add a `full-access-ask` preset (full file access *with* prompts)
+  through `~/.dsh/settings.yaml` **did not take effect**: after a relaunch the next
+  new session seeded `workspace-write` + `approval/policy: ask` instead. The
+  settings layer carries **volatile** fields only — `presets` is not one, so the
+  table it named was never composed, and the `defaultPreset` beside it stopped
+  being applied too (`packages/settings/settings/src/schema.ts`). That line of the
+  file was restored from its backup. A preset table ships only as a composition
+  override of the `permission` row in the profile's patch layer — which is what
+  `~/.dsh/profiles/desktop/cordis.patch.yml` now carries, validated by
+  `validate-patch.mjs` (`overrides: [{ "id": "permission" }]`, and the package's
+  patch still the single `cua` row) and by `--dump-config` over a copy of the
+  profile, which printed the patched row with all four presets. The layer split is
+  now measured rather than guessed: that boot still seeded `danger-full-access`,
+  because a composed `defaultPreset` loses to the settings document — `defaultPreset`
+  *is* volatile, and volatile fields are exactly what `settings.yaml` carries (the
+  same mechanism that picks this machine's `agent-default-model`). So the table
+  belongs to the composition and the default choice to `settings.yaml`; that line
+  was flipped to `full-access-ask`, and the running application then resolved the
+  name — `/permission full-access-ask` in the GUI session logged
+  `permission/preset {"preset":"full-access-ask"}` + `approval/policy {"policy":"ask"}`,
+  the sandbox knob unchanged because it was already `danger-full-access`. So full
+  file access *with* prompts is now in force there, and only a **new** session
+  seeding it from `defaultPreset` is left unmeasured. §10 of the macOS document has
+  the whole sequence.
 - **The status projection is a hand-maintained list, and it silently drops what
   it does not name.** Windows reports `elevated`, `elevationAvailable`,
   `backendDetail`, and `sessionId`; `toPermissionReport` kept the twelve fields

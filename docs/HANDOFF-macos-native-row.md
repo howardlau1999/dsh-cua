@@ -548,7 +548,39 @@ Error: refused to run cua_app: the user rejected it. The operating system was no
 The reason is **`the user rejected it`**, not the `no approval service is mounted`
 this document predicted for a session that cannot prompt. Worth knowing before
 someone reads a rejection as a broken gate: this session *had* an approval
-service, and it answered "no" because there was nobody to ask.
+service, so the gate reached it and got a "no" back.
+
+**What produced that "no" is not what this section first said, and the
+correction is measured.** The original claim was that the service "answered no
+because there was nobody to ask" — but no answerer was reached at all. That run's
+own session log
+(`~/.dsh/sessions/--Users-hh.liu-code-cua--/session-17a7a47b-…/session.v4.jsonl.zstd`,
+11:27–11:29: four `approval/asked` events — `cua_click` at (100, 100),
+`cua_type` `"测试"`, `cua_key` escape, `cua_app` Finder — and four
+`approval/decided` events, every one `"outcome":"rejected"`) also carries the
+pair that explains them:
+
+```
+permission/preset {"preset":"danger-full-access"}
+approval/policy   {"policy":"never"}
+```
+
+`ApprovalService.decide()` short-circuits a session whose approval policy is
+`never` **before** dispatching to any answerer, and returns `'rejected'`
+deterministically (the harness's `packages/interaction/user-approval/src/index.ts`).
+Nobody was asked, no prompt was raised, and the plugin rendered the wording above
+verbatim. The policy is this machine's deployed default — `~/.dsh/settings.yaml`
+named `permission.defaultPreset: danger-full-access`, and the base bundle's
+preset table pairs that preset with `approval: never` — and every session here
+was seeded with it, §10's GUI session included. So the wording above was never
+evidence about who could be asked.
+
+The discriminator is therefore **approval policy**, not GUI-versus-headless.
+Under `ask` the request dispatches to the composed answerers, and a refusal there
+is the user's (`the user rejected it`), a withdrawal (`the request was
+withdrawn`), or nobody reachable (`no approver was available to answer`). Until
+someone re-runs this exercise under an `ask` policy, the wording identifies
+neither.
 
 ### The defect the session found
 
@@ -583,6 +615,161 @@ the harness's own `packages/computer-use/computer-use`, and `--dump-config` over
 so the running GUI host does not mount it either and the branch a live load takes
 is the absence path. Confirming a real claim needs a profile that bundles the
 service — a composition change, not a restart. Items 1–3 are closed regardless.
+
+## 10. The GUI session, run — §3 satisfied, §4 items 1 and 2 closed (2026-09-24)
+
+§8 measured everything around the exercise and left one restart between it and
+§4. That restart happened, and this is §4 run from the host the row actually
+ships in: the GUI desktop application, not §9's headless session. §3's
+requirement is met by measurement rather than assumption — the process listening
+on 19387 (`pid 44195`) started at **11:36:31**, and the session that called the
+tools was created at **11:36:34**, three seconds after the boot that registered
+the row. The host's own argv names `/Users/hh.liu/.dsh/profiles/desktop`.
+
+| Tool | What to confirm | Result |
+|---|---|---|
+| `cua_status` | engine version; backend `macos-ax`; permissions as granted; no `/elevat/i` | **Pass.** Byte-for-byte §9's report, quoted there. `/elevat/i` over the rendered text: **0** matches, so the Windows-only field does not leak, and the `on macos  (backend macos-ax)` gap is present exactly as predicted |
+| `cua_displays` | display list with geometry **and density**; negative coordinates | **Pass.** `3 display(s)`, desktop bounding box `[-1168,-1080,3840,2062]` — the same box the earlier records give. Display 1 (main) `0…1512 × 0…982`; displays 2 and 3 sit above it at `y -1080…0` |
+| `cua_tree` | an indexed outline; node count and elapsed time | **Pass.** 9 nodes in **18 ms** from the frontmost application (Ghostty), 15 visited; the result names no budget, so nothing was cut |
+| `cua_element` | `list` reports actions and attributes | **Pass.** `Available actions: (none).` plus 20 readable attributes. Worth recording: `list` is deliberately **ungated** — inspection changes nothing, so it never asks |
+| `cua_click` | delivered | **Refused in this session** — correctly, because its approval policy was `never`. See §9, and the positive run below |
+| the remaining eight | | not re-run this round; §9 covers them and nothing here changes them |
+
+The catalog, as the session held it: the twelve `cua_*` tools and **no**
+`mcp__cua__*` anywhere. Exactly one row, too — the profile's own patch validated
+to `documents: 0` and the package's to `documents: 1` with a single `cua` row,
+which is the bundle install §2 describes and why the first number is correct
+rather than alarming. (The only MCP row on this machine belongs to a *Blender*
+client in the `web` profile, which the host does not boot.)
+
+### The write gate, answered — §4's item 3 has both halves now
+
+The refusal above is the negative half. The positive half came from the session
+opened after the relaunch (`session-5271d134`, policy `ask`): `cua_click` asked,
+and the approval was granted. Its log, verbatim:
+
+```
+approval/asked   {"toolName":"cua_click","callId":"call_00_KBmVaNO9fSRykK1YUgQp3953",
+                  "reason":"Computer Use wants to move at (756, 491) on your desktop."}
+approval/decided {"outcome":"allowed-once"}
+```
+
+So the gate is confirmed in both directions, and the difference between them is
+one thing: the session's approval policy. GUI and headless behaved identically
+under `never` (§9); under `ask` the same tool reaches the user and proceeds on
+`allowed-once`.
+
+### Full access with prompts: settings cannot carry it, the composition can
+
+The GUI host mounts the approval service, and the browser client composes a real
+prompt UI (`packages/client/ui-approval`, wired into the web bundle), so the gate
+*can* prompt here. In this session it did not, because the session was seeded —
+see §9's two log events — with `danger-full-access`, whose `approval` is `never`:
+the ask resolves `rejected` before any answerer is dispatched, and the model
+receives §9's wording again.
+
+To make the prompt reachable while keeping full file access, the first attempt
+put a fourth preset in `~/.dsh/settings.yaml` — sandbox `danger-full-access`,
+approval `ask`, `defaultPreset` pointing at it, and the three built-ins restated
+because a user section replaces the whole key. **It did not take effect, and the
+restart meant to exercise it is what proved it did not.**
+
+After the application was quit and relaunched (`pid 46698`, boot 11:48:18), a new
+GUI session (`session-5271d134`, created 11:49:25) seeded — verbatim from its log:
+
+```
+permission/preset {"preset":"workspace-write"}
+sandbox/mode      {"mode":"workspace-write"}
+approval/policy   {"policy":"ask"}
+```
+
+`full-access-ask` appears nowhere in it. The reason is a division the settings
+layer draws explicitly: it carries **volatile** fields only — `volatileForm`
+selects "fields whose nearest volatile ancestor makes them editable without
+remounting", and `isVolatilePath` rejects every other path (harness
+`packages/settings/settings/src/schema.ts`). In this plugin's config
+`defaultPreset` is `z.string().volatile()` and `presets` is not, so a preset
+table cannot be shipped as a setting; and once the section was no longer
+resolvable, the `defaultPreset` beside it stopped being applied too, which is why
+the new session fell back to a derived default instead of the configured one.
+
+Two things follow, and the second is the one that matters:
+
+- **The preset table is composition, not settings.** Adding a preset means an
+  id-targeted override of the `permission` row in the profile's patch layer — the
+  same layer the harness's own configuration editor writes non-volatile config
+  into (`packages/boot/config-editor`). That edit was **not** made this round: it
+  changes the boot composition, so it wants `validate-patch.mjs` and a
+  throwaway-profile rehearsal first.
+- **The prompt became reachable anyway.** The new session above carries
+  `approval/policy: ask`, which is what the base bundle's own
+  `process.env.DSH_PERMISSION_MODE ?? 'workspace-write'` expression yields when
+  that variable is unset — so a write tool called in *that* session dispatches to
+  the composed answerers instead of being short-circuited. Why the earlier
+  sessions, §9's included, sat on `danger-full-access` while this one does not is
+  **not settled**: either that variable was in the old host's environment, or the
+  `defaultPreset` line was being applied until this round's edit made its section
+  unresolvable. Both fit every measurement taken here.
+
+`~/.dsh/settings.yaml` was restored byte-for-byte from
+`~/.dsh/settings.yaml.bak-cua-20260924-114208` once this was measured, so the
+file carries no trace of the attempt.
+
+The composition route was then taken. `~/.dsh/profiles/desktop/cordis.patch.yml`
+now carries a `- id: permission` override whose `presets` restates the three
+built-ins and adds `full-access-ask` (sandbox `danger-full-access`, approval
+`ask`), with `defaultPreset: full-access-ask` beside them. Backups:
+`cordis.patch.yml.bak-cua-20260924-121427`, and the matching `package.json` one.
+`validate-patch.mjs` accepts the file through the loader's own parser —
+`documents: 1`, `patchEntries: 1`, `overrides: [{ "id": "permission" }]` — and the
+package's patch still reports its single `cua` row, so the catalog stays twelve
+tools rather than twenty-four.
+
+The composition itself was then measured, on a throwaway copy of the profile, with
+the harness's own `--dump-config`:
+
+```
+# == @deepseek-ai/dsh-base, patched by …/zz-perm-check/cordis.patch.yml
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  config:
+    defaultPreset: full-access-ask
+    presets:          # all four, abbreviated here
+      read-only / workspace-write / danger-full-access / full-access-ask
+```
+
+so the table composes as intended. The application's next boot nevertheless seeded
+`danger-full-access` again (`session-cf104eab`, created 13:04:49 after a relaunch
+at 13:04:45) — which settles the question the first attempt left open: **a
+composed `defaultPreset` loses to the settings document.** `defaultPreset` is
+volatile, and `settings.yaml` really does carry volatile fields — that is how
+`agent-default-model` selects this machine's model — so the document's value is
+what `config.defaultPreset.get()` returns. The **preset table belongs to the
+composition; the default choice belongs to `settings.yaml`**, and the first attempt
+had both in the wrong layer.
+
+With the table composed, `~/.dsh/settings.yaml` was then flipped to
+`defaultPreset: full-access-ask` — the one line that was the document's to own all
+along. **And the live application then resolved that name**, which is the proof
+the patch is composed in the running host rather than only under `--dump-config`:
+`/permission full-access-ask` in the GUI session appended
+
+```
+permission/preset {"preset":"full-access-ask"}
+approval/policy   {"policy":"ask"}
+```
+
+with no new `sandbox/mode` event, because that knob was already
+`danger-full-access` and only changed knobs are written. So the very session that
+had every write refused at 11:36 now holds full file access *and* real prompts —
+the configuration this section was chasing, on the layer that can actually carry
+it. What remains unmeasured is only that a **new** session seeds it from
+`defaultPreset` rather than from this live switch; it is the same mechanism that
+seeded `danger-full-access` before. Rollback is the two profile backups plus
+restoring that line, and a relaunch.
+
+Item 4 (`ctx.computerUse`) remains unexercisable here for the reason §9 gives, and
+it is the only item left open.
 
 ## Related
 
