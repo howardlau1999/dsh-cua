@@ -763,9 +763,18 @@ with no new `sandbox/mode` event, because that knob was already
 `danger-full-access` and only changed knobs are written. So the very session that
 had every write refused at 11:36 now holds full file access *and* real prompts —
 the configuration this section was chasing, on the layer that can actually carry
-it. What remains unmeasured is only that a **new** session seeds it from
-`defaultPreset` rather than from this live switch; it is the same mechanism that
-seeded `danger-full-access` before. Rollback is the two profile backups plus
+it. The default path was then measured as well, which is what closes the exercise
+rather than merely demonstrating it: a **new** session (`session-25943e68`, created
+13:53:13, no manual switching) seeded from `defaultPreset` alone —
+
+```
+permission/preset {"preset":"full-access-ask"}
+sandbox/mode      {"mode":"danger-full-access"}
+approval/policy   {"policy":"ask"}
+```
+
+— so every session from here starts on full file access with prompts, and the
+`settings.yaml` line is what decides that. Rollback is the two profile backups plus
 restoring that line, and a relaunch.
 
 ### The write gate's own knob: `session`, and proof that a patch edit reaches a running host

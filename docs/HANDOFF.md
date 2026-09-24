@@ -359,9 +359,13 @@ Still open:
   was flipped to `full-access-ask`, and the running application then resolved the
   name — `/permission full-access-ask` in the GUI session logged
   `permission/preset {"preset":"full-access-ask"}` + `approval/policy {"policy":"ask"}`,
-  the sandbox knob unchanged because it was already `danger-full-access`. So full
-  file access *with* prompts is now in force there, and only a **new** session
-  seeding it from `defaultPreset` is left unmeasured. §10 of the macOS document has
+  the sandbox knob unchanged because it was already `danger-full-access`. A **new**
+  session (`session-25943e68`, 13:53:13, no manual switching) then seeded
+  `full-access-ask` + `danger-full-access` + `ask` from `defaultPreset` alone, so
+  full file access *with* prompts is now what every session here starts on. The same
+  patch also carries `- id: cua` with `writeApproval: session`, asking at most once
+  per write tool per session; a config-only override reaches a running host without
+  a relaunch, which was measured rather than assumed. §10 of the macOS document has
   the whole sequence.
 - **The status projection is a hand-maintained list, and it silently drops what
   it does not name.** Windows reports `elevated`, `elevationAvailable`,
