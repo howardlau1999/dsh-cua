@@ -142,6 +142,13 @@ function projectStatus(raw: Record<string, unknown>, tools: ToolContext): Status
     // Absent on a backend that does not report elevation, so the key never
     // appears in the value and the schema's optionality does the work.
     ...(report.elevated === undefined ? {} : { elevated: report.elevated }),
+    // The same treatment for every other field a backend adds. These used to be
+    // dropped here, which made an additive engine field invisible to a model
+    // while nothing failed — the trap `smoke.mjs` now asserts against.
+    ...(report.platformSupported === undefined ? {} : { platformSupported: report.platformSupported }),
+    ...(report.backendDetail === undefined ? {} : { backendDetail: report.backendDetail }),
+    ...(report.elevationAvailable === undefined ? {} : { elevationAvailable: report.elevationAvailable }),
+    ...(report.sessionId === undefined ? {} : { sessionId: report.sessionId }),
   }
 }
 
@@ -161,6 +168,11 @@ interface StatusValue {
   eligibleTools: string[]
   /** Present only where the backend reports it; see {@link PermissionReport}. */
   elevated?: boolean
+  /** Ditto: each of these appears only where the engine reported it. */
+  platformSupported?: boolean
+  backendDetail?: string
+  elevationAvailable?: boolean
+  sessionId?: string
 }
 
 /** Output schema shared by `cua_status` and `cua_request_permissions`. */
@@ -184,6 +196,14 @@ const STATUS_SCHEMA = {
     // a required field would force macOS to invent a value for a boundary that
     // does not exist there.
     elevated: { type: 'boolean' },
+    // Additive engine fields travel the same way: declared, because
+    // `additionalProperties: false` would otherwise reject a backend that
+    // reports them, and optional, because a backend that does not must not have
+    // to invent a value.
+    platformSupported: { type: 'boolean' },
+    backendDetail: { type: 'string' },
+    elevationAvailable: { type: 'boolean' },
+    sessionId: { type: 'string' },
   },
 } as const
 
@@ -233,6 +253,21 @@ function renderStatus(value: StatusValue): string {
       : 'Engine elevation: standard token (not elevated). Input aimed at a window owned by an elevated '
         + 'process is discarded by Windows (UIPI) and such a window\'s contents are withheld from the tree; '
         + 'every other window is reachable.')
+  }
+  // Everything else a backend adds, rendered only where it was reported — so a
+  // macOS report stays byte-for-byte what it was before these fields existed,
+  // and a host with no backend says so in words rather than in a boolean.
+  if (value.platformSupported === false) {
+    lines.push('', 'This platform has no Computer Use backend: the engine answers, but no tool can act.')
+  }
+  if (value.backendDetail !== undefined) {
+    lines.push('', `Backend: ${value.backendDetail}`)
+  }
+  if (value.elevationAvailable === false) {
+    lines.push('Elevation is not available on this host, so retrying elevated cannot change the outcome.')
+  }
+  if (value.sessionId !== undefined) {
+    lines.push(`Session: ${value.sessionId}.`)
   }
   lines.push('', `Available with the current permissions: ${value.eligibleTools.join(', ')}.`)
   return lines.join('\n')

@@ -262,7 +262,8 @@ check(
 // check is platform-split because the field is: macOS has no integrity boundary
 // between two processes of the same user, so it reports nothing and the schema's
 // optionality is what keeps that honest.
-const elevationLine = (await engineStatus()).permissions?.elevated
+const enginePayload = (await engineStatus()).permissions ?? {}
+const elevationLine = enginePayload.elevated
 if (WINDOWS) {
   check(
     typeof elevationLine === 'boolean',
@@ -291,6 +292,81 @@ if (WINDOWS) {
     status.elevated === undefined,
     'cua_status invents no elevation where none was reported',
     String(status.elevated),
+  )
+  // The rendered half of the same rule, which until now was checked by hand:
+  // dropping the field from the value is not enough if the prose still mentions
+  // it, because the prose is what a model quotes back to a user.
+  check(
+    !/elevat/i.test(statusText),
+    'a macOS report states no Windows-only elevation claim',
+    statusText,
+  )
+}
+
+// The general form of that trap, closed. `engine.status` nests a permissions
+// object whose fields the projection is free to drop, and nothing compared the
+// two shapes — so the next additive engine field would have gone invisible in
+// exactly the way elevation did, and only a reader of the projection would ever
+// notice. This asserts the invariant rather than the incident: every field the
+// payload carries must reach a model under its own name, under a mapped one, or
+// be listed here as deliberately unreported. A backend that grows a field fails
+// until someone decides what it means.
+//
+// The two entries are decisions, not oversights, and this is where they live now
+// rather than in a handoff paragraph:
+//   executablePath — reported as `enginePath`: the path the plugin resolved, and
+//     the one the report renders as `Engine binary:`. Same fact, one name.
+//   processId — reported by no surface. It reached `PermissionReport` and was
+//     dropped one layer up, which is exactly the half-carry this check exists to
+//     stop; it stays out because nothing consumes it, and an engine that dies is
+//     the watchdog's business rather than a model's.
+const REPORTED_AS = { executablePath: 'enginePath' }
+const DELIBERATELY_UNREPORTED = new Set(['processId'])
+const invisible = Object.keys(enginePayload).filter(key =>
+  !(key in status) && !(REPORTED_AS[key] in status) && !DELIBERATELY_UNREPORTED.has(key))
+check(
+  invisible.length === 0,
+  'cua_status exposes every field the engine reports',
+  invisible.length === 0 ? '' : `dropped: ${invisible.join(', ')}`,
+)
+
+// Whether the platform is supported at all, which only a host without a backend
+// answers `false` to. Carried and compared wherever it is reported, so the
+// equality holds on both backends rather than being platform-split.
+check(
+  status.platformSupported === enginePayload.platformSupported,
+  'cua_status carries whether the platform has a backend',
+  `tool ${String(status.platformSupported)} vs engine ${String(enginePayload.platformSupported)}`,
+)
+
+// The Windows-only descriptions, checked the way elevation is: present where the
+// engine reports them, absent — not defaulted — where it does not.
+if (WINDOWS) {
+  check(
+    status.backendDetail === enginePayload.backendDetail,
+    'cua_status carries what the backend is',
+    `tool ${String(status.backendDetail)} vs engine ${String(enginePayload.backendDetail)}`,
+  )
+  check(
+    status.elevationAvailable === enginePayload.elevationAvailable,
+    'cua_status carries whether an elevated retry is possible',
+    `tool ${String(status.elevationAvailable)} vs engine ${String(enginePayload.elevationAvailable)}`,
+  )
+  check(
+    status.sessionId === enginePayload.sessionId,
+    'cua_status carries the session kind',
+    `tool ${String(status.sessionId)} vs engine ${String(enginePayload.sessionId)}`,
+  )
+  check(statusText.includes('Backend:'), 'cua_status renders what the backend is', statusText)
+} else {
+  check(
+    status.backendDetail === undefined && status.elevationAvailable === undefined && status.sessionId === undefined,
+    'a backend reporting none of the Windows-only fields adds none of them',
+    JSON.stringify({
+      backendDetail: status.backendDetail,
+      elevationAvailable: status.elevationAvailable,
+      sessionId: status.sessionId,
+    }),
   )
 }
 

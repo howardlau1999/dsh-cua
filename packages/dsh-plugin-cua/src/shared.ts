@@ -138,6 +138,38 @@ export interface PermissionReport {
    * "the engine is broken".
    */
   elevated?: boolean
+  /**
+   * Whether this platform has a backend at all, when the engine reports it.
+   *
+   * Absent rather than `false` where the backend does not report it: this is the
+   * one field in which a host with no implementation says so, and inventing a
+   * value would turn "there is no backend here" into "the backend says no".
+   */
+  platformSupported?: boolean
+  /**
+   * What the backend actually is, when the engine describes itself.
+   *
+   * Windows-only so far: its payload names the mechanism
+   * (`UI Automation (Control view) + SendInput + GDI screen capture`), which is
+   * the difference between "the tree is thin here" and "this backend does not
+   * read the control view".
+   */
+  backendDetail?: string
+  /**
+   * Whether an elevated retry is possible at all, when the backend reports it.
+   *
+   * Windows-only, and not the same claim as {@link elevated}: `elevated: false`
+   * with `elevationAvailable: false` means no retry can help, which is a
+   * different answer to give a user than "start it elevated and try again".
+   */
+  elevationAvailable?: boolean
+  /**
+   * What kind of session the engine runs in, when the backend reports it.
+   *
+   * Windows-only so far. A non-interactive session has no desktop to drive, so
+   * this is worth carrying even though nothing renders it as a headline.
+   */
+  sessionId?: string
 }
 
 /** Normalize a permission report. */
@@ -159,6 +191,15 @@ export function toPermissionReport(value: unknown): PermissionReport {
     // measured "not elevated" and would put a Windows-only claim in a macOS
     // report.
     ...(typeof row.elevated === 'boolean' ? { elevated: row.elevated } : {}),
+    // The same discipline for everything else a backend adds, and for the same
+    // two reasons: a macOS report must not grow a Windows-only claim, and an
+    // additive engine field must not become invisible merely because nobody
+    // extended this function. `smoke.mjs` asserts the second half against the
+    // live payload instead of trusting this comment.
+    ...(typeof row.platformSupported === 'boolean' ? { platformSupported: row.platformSupported } : {}),
+    ...(typeof row.backendDetail === 'string' && row.backendDetail !== '' ? { backendDetail: row.backendDetail } : {}),
+    ...(typeof row.elevationAvailable === 'boolean' ? { elevationAvailable: row.elevationAvailable } : {}),
+    ...(typeof row.sessionId === 'string' && row.sessionId !== '' ? { sessionId: row.sessionId } : {}),
   }
 }
 

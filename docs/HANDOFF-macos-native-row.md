@@ -120,15 +120,16 @@ all 6 stages passed
 
 Expected counts, measured on macOS 26.6.2 / Swift 6.4 with the Command Line Tools:
 types clean, **34** Swift tests in 7 suites, `check-schemas` 46/46,
-`check-mcp-catalog` 128/128, `check-capture-deadline` 5/5, and `smoke` **58/58**.
-The two macOS-only stages are the Swift unit tests and the capture deadline; the
-other four are the ones Windows also runs.
+`check-mcp-catalog` 128/128, `check-capture-deadline` 5/5, and `smoke` **62/62**
+(58 before §10's projection work added four checks to the status section). The two
+macOS-only stages are the Swift unit tests and the capture deadline; the other four
+are the ones Windows also runs.
 
 The smoke count is the one number that differs from the Windows machine, and the
 reason is worth knowing: `make check` does not set `DSH_CUA_CAPTURE`, so the
 capture assertions skip. Set it when the script is already inside the host's
-process tree and the same suite runs **74/74**; add `--write` for the pointer,
-key, and background-app assertions and it is **85/85**.
+process tree and the same suite runs **78/78**; add `--write` for the pointer, key,
+and background-app assertions and it is **89/89**.
 
 **The capture deadline stage needs no screen-recording grant** — it drives the
 simulated wedge through `CUA_ENGINE_SIMULATE_WEDGED_CAPTURE`, not a real capture.

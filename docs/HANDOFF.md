@@ -83,7 +83,7 @@ Test suites, all green:
 | `check-schemas.mjs` | 46 checks: every TypeScript tool's parameter and output schema, through the harness's own validator |
 | `check-mcp-catalog.mjs` | 128 checks: the twelve tools the engine publishes over MCP, validated the same way and compared against the TypeScript catalog |
 | `check-capture-deadline.mjs` | 5 checks: a wedged capture aborts the engine within its bound |
-| `smoke.mjs` | 51 checks when it was written, **68 on Windows today**: the built bundle loaded and every tool called against the real engine. macOS runs 58 of them by default, 74 with `DSH_CUA_CAPTURE=1`, 85 with `--write` too |
+| `smoke.mjs` | 51 checks when it was written, **68 on Windows today**: the built bundle loaded and every tool called against the real engine. macOS runs **62** of them by default, **78** with `DSH_CUA_CAPTURE=1`, **89** with `--write` too |
 | `smoke.mjs --write` | Adds pointer movement, key delivery, and background read/write with a focus assertion |
 
 `make check` runs the first five. `make smoke-writes` adds the last.
@@ -92,9 +92,17 @@ Two numbers in the table above age, and were re-measured on the Windows machine
 rather than carried forward: `check-schemas.mjs` is still 46 checks and
 `check-mcp-catalog.mjs` still 128, but the smoke suite grew to 68 as tools gained
 assertions — most recently the three that hold `cua_status` to the elevation the
-engine actually reported. `scripts/check.mjs` skips the two macOS-only stages on
-Windows and says so — `all 4 stages passed (2 skipped on this platform)` — so a
-green `pnpm run check` on Windows is four suites, not six.
+engine actually reported. The macOS counts moved for the same reason and were
+re-measured on macOS: four checks joined the status section (§4) — the
+payload-to-value invariant and the three fields it protects — taking 58/74/85 to
+**62/78/89**. One wrinkle worth recording because it was seen once and not
+reproduced: the first `--write` run of that measurement threw an uncaught error
+immediately after a capture run, and the same sequence then passed twice (78/78
+then 89/89, exit 0). It is not attributable to the projection change, and it is
+noted here so that a repeat sighting starts from a known one.
+`scripts/check.mjs` skips the two macOS-only stages on Windows and says so —
+`all 4 stages passed (2 skipped on this platform)` — so a green `pnpm run check`
+on Windows is four suites, not six.
 
 ## 1. Exercise the tools through the model — **done**
 
@@ -215,7 +223,7 @@ rather than the shipped one. One trap for a repeat run: `ctx.get('computerUse')`
 returns cordis's traceable wrapper, not the registry instance, so an identity
 assertion fails while the claim works — read `providerName` instead.
 
-## 3. Test coverage and CI — **done, except CI**
+## 3. Test coverage and CI — **done**
 
 The twelve MCP tool definitions are now asserted
 (`scripts/check-mcp-catalog.mjs`), which is what §3 asked for and what caught the
@@ -252,9 +260,30 @@ Two things about running them are worth knowing:
 - **XCTest is not an option at all**: the Command Line Tools do not ship the
   module. Swift Testing was chosen for that reason.
 
-No CI. The engine tests and both schema checks need no permissions or desktop,
-so they would run on a macOS runner; the smoke and deadline checks need a live
-desktop and real permissions, so they stay local.
+CI now exists as [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), and it
+deliberately covers less than "the suite". The split is worth stating where
+someone will read it:
+
+- **What runs, on a clean clone.** macOS builds the Swift engine, runs the 34 unit
+  tests, and runs the capture-deadline checks; Windows builds the .NET engine.
+  Those three scripts import no harness package, which is what makes a bare
+  checkout enough. The deadline check belongs there because it needs no
+  screen-recording grant — it drives the simulated wedge
+  (`CUA_ENGINE_SIMULATE_WEDGED_CAPTURE`), not a real capture. An earlier version
+  of this paragraph claimed the opposite and would have left it out.
+- **What does not run, and why.** `typecheck`, `check-schemas`,
+  `check-mcp-catalog`, `smoke` and `validate-patch` import
+  `@deepseek-ai/dsh-tools` or `@deepseek-ai/dsh-app-boot` through this package's
+  `link:../../../deepseek-harness/…` devDependencies. The harness repository is
+  public, but it publishes no build output to git — `lib/` and `node_modules/`
+  are both gitignored — so a runner would have to clone and build that whole
+  monorepo before any of them could execute. Until someone does that
+  deliberately, a green CI run means "both engines build and their tests pass",
+  not "the suite is green"; `make check` on a configured machine is still the only
+  thing that means that.
+- **One further limit, invisible from outside.** Even with the harness present,
+  the macOS half of `smoke` could not exercise its permission-gated checks:
+  Accessibility and Screen Recording cannot be granted to a runner.
 
 ## 4. Engine work
 
@@ -382,16 +411,26 @@ Still open:
   a relaunch, which was measured rather than assumed. §10 of the macOS document has
   the whole sequence.
 - **The status projection is a hand-maintained list, and it silently drops what
-  it does not name.** Windows reports `elevated`, `elevationAvailable`,
-  `backendDetail`, and `sessionId`; `toPermissionReport` kept the twelve fields
-  macOS also has, so a model on Windows could not see which side of the UIPI
-  boundary the engine was on while `cua_status`'s own hint text referred to
-  `elevated: false` as though the model could read it. `elevated` is now carried
-  through, optionally, and asserted three ways in `smoke.mjs`. The general form of
-  the trap remains: an additive engine field is invisible until someone reads the
-  projection, and no check compares the two shapes field by field. The other three
-  are still dropped — deliberately, since nothing consumes them, but the reason
-  they are dropped lives only in this paragraph.
+  it does not name — both halves of that are now fixed.** Windows reports
+  `elevated`, `elevationAvailable`, `backendDetail`, and `sessionId`;
+  `toPermissionReport` kept the twelve fields macOS also has, so a model on
+  Windows could not see which side of the UIPI boundary the engine was on while
+  `cua_status`'s own hint text referred to `elevated: false` as though the model
+  could read it. All four are carried now, each only when the backend actually
+  reported it, so a macOS report never grows a Windows-only claim — the render is
+  byte-for-byte what §9 of the macOS document quotes, checked by diffing the
+  output against that quote rather than by reading the guards.
+
+  The general form of the trap is closed with it: `smoke.mjs` now compares the two
+  shapes, asserting that **every field the engine's status payload carries reaches
+  a model** under its own name, under a mapped one, or as an entry in a short
+  list of deliberate omissions. It found two cases on its first run, which is the
+  argument for having it: `executablePath`, reported as `enginePath` (same fact,
+  the name the report renders), and `processId`, which reached `PermissionReport`
+  and was dropped one layer up — a half-carry nothing would have noticed. Both
+  decisions now live in that list in `smoke.mjs` rather than in this paragraph,
+  and a backend that grows a field fails the check until someone decides what it
+  means.
 - **Windows is done**, and it was done on the native row: the C#/.NET engine
   implements all twelve methods and `--mcp`, `check-mcp-catalog.mjs` validates its
   catalog (128 checks), and the smoke test drives real windows. Linux is the one
@@ -447,10 +486,12 @@ exercise macOS-only behaviour — and the summary says which:
 `all 4 stages passed (2 skipped on this platform)`. On the Windows machine that is
 `check-schemas` 46/46, `check-mcp-catalog` 128/128, and `smoke` 68/68. On macOS it
 is the same two schema stages plus 34 Swift tests, 5 capture-deadline checks and
-`smoke` 58/58 — the difference is that `make check` leaves `DSH_CUA_CAPTURE`
+`smoke` **62/62** — the difference is that `make check` leaves `DSH_CUA_CAPTURE`
 unset, so the capture assertions skip rather than run. Set it when the script is
-already inside the host's process tree and macOS reports 74/74, or 85/85 with
-`--write`.
+already inside the host's process tree and macOS reports **78/78**, or **89/89**
+with `--write`. (Those three macOS counts were re-measured after the projection
+work added four checks to the status section; the Windows 68 will move the same
+way whenever it is next measured there.)
 
 The engine is usable without the harness, which is how it gets debugged. Note
 the path: the handoff previously printed `lib/bin/cua-engine`, which is wrong —

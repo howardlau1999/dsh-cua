@@ -1,0 +1,77 @@
+# Continuous integration for the Computer Use plugin.
+#
+# The repository's checks split in two, and the split is what this workflow is
+# built around.
+#
+# **Self-contained: the native engines.** `build-engine.mjs`, `test-swift.mjs`
+# and `check-capture-deadline.mjs` import no harness package at all, so a clean
+# clone can build and test a backend with nothing but the platform toolchain.
+# That is what the two jobs below do, and it is the first automated check either
+# backend has had on a machine that is not the author's.
+#
+# **Harness-dependent: everything else.** `typecheck`, `check-schemas`,
+# `check-mcp-catalog`, `smoke` and `validate-patch` each import
+# `@deepseek-ai/dsh-tools` or `@deepseek-ai/dsh-app-boot`, which this package's
+# devDependencies reach through `link:../../../deepseek-harness/…` — a sibling
+# checkout. The harness is public (github.com/deepseek-ai/deepseek-harness) but
+# publishes no build output to git: `lib/` and `node_modules/` are both
+# gitignored, so a clone would have to be installed and built as a whole monorepo
+# before any of those stages could run. Until someone does that deliberately,
+# this workflow does not claim them, and a green run here must not be read as
+# "the suite is green": `make check` on a configured machine is still the only
+# thing that means that.
+#
+# One further limit, stated here because it is invisible from the outside:
+# `smoke` also needs a desktop session. macOS gates trees and input behind
+# Accessibility and captures behind Screen Recording, and a runner can grant
+# neither, so even with the harness present the macOS half of that stage could
+# not exercise its permission-gated checks.
+#
+# `check-capture-deadline.mjs` is macOS-only because the wedge it simulates is:
+# `CUA_ENGINE_SIMULATE_WEDGED_CAPTURE` is implemented in the Swift capture path
+# (`native/cua-engine/Sources/CuaEngine/Capture.swift`), and the Windows engine
+# has no equivalent, so the Windows job builds rather than pretends.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS engine (Swift)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build the engine
+        run: node packages/dsh-plugin-cua/scripts/build-engine.mjs
+      - name: Engine unit tests
+        run: node packages/dsh-plugin-cua/scripts/test-swift.mjs
+      - name: A wedged capture cannot hang the engine
+        run: node packages/dsh-plugin-cua/scripts/check-capture-deadline.mjs
+
+  windows:
+    name: Windows engine (.NET)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Pinned rather than taken from the image: the engine's csproj targets a
+      # specific major, and a runner image that drops it would fail the build in
+      # a way that reads like a source defect.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.x'
+      - name: Build the engine
+        run: node packages/dsh-plugin-cua/scripts/build-engine.mjs
