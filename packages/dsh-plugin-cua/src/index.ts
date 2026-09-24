@@ -36,8 +36,31 @@ export const name = 'dsh-plugin-cua'
 /** Services the plugin registers against and reads the session prompt from. */
 export const inject = ['tools', 'systemPrompt']
 
-/** Section order: after the harness's own tool guidance, before trailing context. */
-const PROMPT_SECTION_ORDER = 900
+/**
+ * Where the guidance section goes when the host will not say.
+ *
+ * The harness publishes one order for computer-use guidance, and its own
+ * providers ask for it rather than naming a number. This plugin hardcoded 900,
+ * and the table has since moved past that value: 900 is `FILE_REFERENCE` today,
+ * and it sits *before* every tool section rather than after them the way the
+ * comment that used to sit here claimed. The number below is the harness's
+ * `TOOL_COMPUTER_USE`, used only when the host does not answer.
+ */
+const FALLBACK_GUIDANCE_ORDER = 3000
+
+/**
+ * The slice of the prompt service this plugin asks for an order.
+ *
+ * Declared locally, like the approval and computer-use slices, because the host
+ * type this package compiles against lags the host's own table: the union
+ * `getSectionOrder` accepts has no `TOOL_COMPUTER_USE` in it, while the running
+ * host defines that name — measured on the shipped application, whose table reads
+ * `TOOL_COMPUTER_USE: 3000`. Asking through a narrow local slice is right on
+ * both: an unknown name yields `undefined`, and the fallback covers it.
+ */
+interface PromptOrderCapability {
+  getSectionOrder?: (name: string) => number | undefined
+}
 
 /**
  * The engine executable's name inside the package's `lib/bin`.
@@ -161,7 +184,11 @@ export function apply(ctx: Context, config: CuaConfig = {}): void {
 
   ctx.systemPrompt.section({
     name: 'cua:guidance',
-    order: PROMPT_SECTION_ORDER,
+    // The host's own order for computer-use guidance, so this section lands where
+    // the harness expects tool guidance rather than at a number this package
+    // picked and the harness later moved past. See FALLBACK_GUIDANCE_ORDER.
+    order: (ctx.systemPrompt as unknown as PromptOrderCapability).getSectionOrder?.('TOOL_COMPUTER_USE')
+      ?? FALLBACK_GUIDANCE_ORDER,
     text: GUIDANCE,
   })
 

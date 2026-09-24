@@ -135,6 +135,49 @@ for (const definition of registered) {
 check(sections.length === 1 && sections[0].name === 'cua:guidance', 'contributes exactly one prompt section')
 check(typeof sections[0].text === 'string' && sections[0].text.includes('cua_tree'), 'guidance names the tools')
 
+/**
+ * The order the guidance section lands at, on a host of the given shape.
+ *
+ * The section's placement is the host's to state: the harness publishes one order
+ * for computer-use guidance and its own providers ask for it, while this plugin
+ * used to hardcode 900 — `FILE_REFERENCE`'s value in that table today, and before
+ * every tool section rather than after them.
+ */
+function guidanceOrderOn(host) {
+  const seen = []
+  const service = {
+    register: () => () => {},
+    section: section => { seen.push(section); return () => {} },
+    ...host,
+  }
+  plugin.apply({
+    tools: service,
+    systemPrompt: service,
+    get: key => (key === 'tools' || key === 'systemPrompt') ? service : undefined,
+    effect: () => {},
+    logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+  }, plugin.Config({}))
+  return seen.find(section => section.name === 'cua:guidance')?.order
+}
+
+// Two hosts, because the plugin has to be right on both: one that answers with a
+// number of its own, and one that predates the name entirely.
+check(
+  guidanceOrderOn({ getSectionOrder: name => name === 'TOOL_COMPUTER_USE' ? 4242 : undefined }) === 4242,
+  'the guidance section takes the order its host states',
+  String(guidanceOrderOn({ getSectionOrder: () => 4242 })),
+)
+check(
+  guidanceOrderOn({}) === 3000,
+  'without an answer the guidance section falls back to the harness order',
+  String(guidanceOrderOn({})),
+)
+check(
+  guidanceOrderOn({ getSectionOrder: () => undefined }) === 3000,
+  'a host that does not know the name falls back rather than placing the section at undefined',
+  String(guidanceOrderOn({ getSectionOrder: () => undefined })),
+)
+
 /** One deliberately invalid invocation per tool, where the schema constrains it. */
 function invalidSample(name) {
   switch (name) {

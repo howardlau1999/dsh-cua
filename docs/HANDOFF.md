@@ -80,7 +80,7 @@ Test suites, all green:
 | Suite | Covers |
 |---|---|
 | `swift test` (via `scripts/test-swift.mjs`) | **34** tests over the engine's pure logic: coordinate conversion, region clipping, display overlap, application ranking, application listing, pointer buttons, catalog consistency |
-| `check-schemas.mjs` | 46 checks: every TypeScript tool's parameter and output schema, through the harness's own validator |
+| `check-schemas.mjs` | **49** checks: every TypeScript tool's parameter and output schema, through the harness's own validator, plus the guidance section's order (see §4) |
 | `check-mcp-catalog.mjs` | 128 checks: the twelve tools the engine publishes over MCP, validated the same way and compared against the TypeScript catalog |
 | `check-capture-deadline.mjs` | 5 checks: a wedged capture aborts the engine within its bound |
 | `smoke.mjs` | 51 checks when it was written, **68 on Windows today**: the built bundle loaded and every tool called against the real engine. macOS runs **62** of them by default, **78** with `DSH_CUA_CAPTURE=1`, **89** with `--write` too |
@@ -89,7 +89,7 @@ Test suites, all green:
 `make check` runs the first five. `make smoke-writes` adds the last.
 
 Two numbers in the table above age, and were re-measured on the Windows machine
-rather than carried forward: `check-schemas.mjs` is still 46 checks and
+rather than carried forward: `check-schemas.mjs` is 49 checks now and
 `check-mcp-catalog.mjs` still 128, but the smoke suite grew to 68 as tools gained
 assertions — most recently the three that hold `cua_status` to the elevation the
 engine actually reported. The macOS counts moved for the same reason and were
@@ -296,6 +296,19 @@ someone will read it:
 
 Done:
 
+- **The guidance section took its order from a number the harness had moved past.**
+  `ctx.systemPrompt.section({ name: 'cua:guidance', … })` hardcoded `900`, under a
+  comment claiming the section landed "after the harness's own tool guidance". It
+  did not: the harness's table puts `FILE_REFERENCE` at 900 and every tool section
+  above it, while publishing a canonical order for exactly this guidance —
+  `TOOL_COMPUTER_USE: 3000` — which its own computer-use providers ask for rather
+  than name (`getSectionOrder('TOOL_COMPUTER_USE')`). The plugin asks the host now
+  and falls back to 3000 when the host does not answer, through a locally declared
+  slice, because the type this package compiles against lags the running host's own
+  table: the union `getSectionOrder` accepts has no `TOOL_COMPUTER_USE` in it, while
+  the shipped application defines the name (both measured). Three checks in
+  `check-schemas.mjs` pin the behavior on a host that states an order and on one
+  that cannot, which is why that stage reads 49 rather than 46.
 - **The write gate at the MCP layer** — see §1. Decided against a new mechanism;
   the native row carries it, and the reason is recorded above.
 - **`cua_request_permissions`** — called, and its projection bug fixed.
@@ -535,7 +548,7 @@ and `$(PATH)` appended outside it, so the system PATH survives on both paths.
 Windows runs four — the Swift unit tests and the capture-wedge deadline both
 exercise macOS-only behaviour — and the summary says which:
 `all 4 stages passed (2 skipped on this platform)`. On the Windows machine that is
-`check-schemas` 46/46, `check-mcp-catalog` 128/128, and `smoke` 68/68. On macOS it
+`check-schemas` 49/49, `check-mcp-catalog` 128/128, and `smoke` 68/68. On macOS it
 is the same two schema stages plus 34 Swift tests, 5 capture-deadline checks and
 `smoke` **62/62** — the difference is that `make check` leaves `DSH_CUA_CAPTURE`
 unset, so the capture assertions skip rather than run. Set it when the script is

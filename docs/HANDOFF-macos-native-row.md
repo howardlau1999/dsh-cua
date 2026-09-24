@@ -119,7 +119,7 @@ all 6 stages passed
 ```
 
 Expected counts, measured on macOS 26.6.2 / Swift 6.4 with the Command Line Tools:
-types clean, **34** Swift tests in 7 suites, `check-schemas` 46/46,
+types clean, **34** Swift tests in 7 suites, `check-schemas` 49/49,
 `check-mcp-catalog` 128/128, `check-capture-deadline` 5/5, and `smoke` **62/62**
 (58 before §10's projection work added four checks to the status section). The two
 macOS-only stages are the Swift unit tests and the capture deadline; the other four
