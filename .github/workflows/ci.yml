@@ -48,8 +48,8 @@ jobs:
     name: macOS engine (Swift)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
       - name: Build the engine
@@ -63,14 +63,20 @@ jobs:
     name: Windows engine (.NET)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
       # Pinned rather than taken from the image: the engine's csproj targets a
       # specific major, and a runner image that drops it would fail the build in
       # a way that reads like a source defect.
-      - uses: actions/setup-dotnet@v4
+      # Pinned by commit rather than by tag, with the release the commit belongs
+      # to in the comment: a major tag is a moving ref, and GitHub already forces
+      # the previous majors onto a Node runtime they do not target — the run that
+      # added this workflow carried exactly that deprecation annotation. The
+      # harness repository pins its own workflows the same way, and to the same
+      # checkout commit.
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '9.x'
       - name: Build the engine
