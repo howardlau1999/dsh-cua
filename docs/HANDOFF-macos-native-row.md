@@ -63,7 +63,7 @@ of it is answered now, and §9 says how.
 | The native row's tool **results** on macOS | never seen from a model session | **closed — §9** |
 | The write gate's refusal wording, as a model receives it | same | **closed — §9** |
 | A screenshot's image delivery through the harness's attachment store | same; on Windows the path is read back with `read_image`, on macOS nobody had | **closed — §9** |
-| `ctx.computerUse` claimed by a live macOS host | `smoke.mjs` asserts the slot claim in-process; the live host has never been checked | **not exercisable here** — see below |
+| `ctx.computerUse` claimed by a live macOS host | `smoke.mjs` asserts the slot claim in-process; the live host has never been checked | **claim closed — §10** (real registry, 13/13); a *live host* claim stays out of reach |
 | `cua_status`'s macOS branch | the `elevated` line added for Windows must **not** appear on macOS | **closed — §9** |
 
 **All but `ctx.computerUse` were closed the same day by a headless model session on
@@ -78,6 +78,13 @@ is the plugin's graceful *absence* path (`ctx.get('computerUse')` rather than an
 injected dependency), which is exactly what `smoke.mjs` asserts first. The claim
 branch is asserted in-process against a stub. Exercising a real claim needs a
 composition that mounts the service — a bundle edit, not a restart.
+
+**§10 later closed the claim without needing that composition, and sharpened this
+paragraph's premise.** The packaged application does not *ship* the service either
+— 275 `@deepseek-ai` packages in its tree, no `dsh-computer-use` — so a live host
+claim is an install rather than a bundle edit. But the registry's own source and
+this plugin's built bundle can be put into one real cordis context, and that is what
+§10 does: 13/13 over the claim, three wrong orderings, and the release.
 
 Nothing above needed a fresh install or an edit beyond the three defects the round
 found. The tree is green, the profile is installed in the bundle style, and the
@@ -607,14 +614,22 @@ the flat payload — so nothing caught it; it now also asserts that the two tool
 agree on engine version and backend, and the suite is **58/58** where it was
 57/57.
 
-### What is still open
+### What was open here, and how it was then closed
 
 Item 4, and only item 4 — and it is not a restart away. The service is provided by
 the harness's own `packages/computer-use/computer-use`, and `--dump-config` over
 `desktop`, `web` and `headless` reports **zero** `computerUse` rows in every one,
 so the running GUI host does not mount it either and the branch a live load takes
-is the absence path. Confirming a real claim needs a profile that bundles the
-service — a composition change, not a restart. Items 1–3 are closed regardless.
+is the absence path. Items 1–3 are closed regardless.
+
+**§10 closes it, with one correction to the sentence above.** A live *host* claim
+is indeed out of reach here — further out than "a profile that bundles the service"
+suggests: the packaged application does not even ship the package (275
+`@deepseek-ai` packages in its tree, no `dsh-computer-use`), so mounting it in the
+GUI host would be an install, not a row. But the claim itself does not need the
+host: §10 loads the registry's own source and the plugin's built bundle into one
+real cordis context and drives the real `register`, which is a stronger statement
+than the stub `smoke.mjs` uses.
 
 ## 10. The GUI session, run — §3 satisfied, §4 items 1 and 2 closed (2026-09-24)
 
@@ -817,8 +832,48 @@ So this machine now runs full file access *with* prompts, asking at most five ti
 per session — once per write tool (`cua_click`, `cua_type`, `cua_key`,
 `cua_element`, `cua_app`) — and never for a read.
 
-Item 4 (`ctx.computerUse`) remains unexercisable here for the reason §9 gives, and
-it is the only item left open.
+### Item 4: the slot claim, exercised against the real registry
+
+§9 called this "not exercisable here" because no profile mounts the service. That
+holds for a *host* claim, and the reason is stronger than a missing row: the
+packaged application does not ship the package at all — 275 `@deepseek-ai`
+packages in its tree and no `dsh-computer-use` among them — so the GUI host would
+need an install, not a composition edit.
+
+The claim itself, though, only needs the two real pieces in one process, and both
+exist on this machine: the registry's source in the harness checkout
+(`packages/computer-use/computer-use/src/index.ts`) and this plugin's built
+bundle. Mounted into one real cordis `Context` — with minimal doubles for the
+three services `apply()` expects (`tools`, `systemPrompt`, the silent `logger`) —
+and driven through the plugin's own `apply()`, the result was **13/13**:
+
+| # | What was exercised | Result |
+|---|---|---|
+| A | No service mounted — the composition this machine runs | `ctx.get('computerUse')` is `undefined`, the twelve tools still register, and the ready line says `no computer-use service mounted` |
+| B | The registry mounted | the ready line says `computer use provider "cua"`, and the registry's own `providerName` reads `"cua"` |
+| C | A second `register` | throws `computer use provider "cua" is already registered` — for the same name and for a foreign one, naming the incumbent |
+| D | A second `apply()` on a claimed slot | throws the same error; the first claim survives |
+| E | A foreign provider registered **first** | the plugin refuses to load at all, and the incumbent keeps the slot |
+| F | Disposing the plugin's effects | `providerName` returns to `undefined` — the slot is released with the fiber |
+
+Two things worth carrying forward from this:
+
+- **A trap that costs a round trip.** `ctx.get('computerUse')` does *not* return
+  the registry instance: cordis hands back a traceable wrapper, so
+  `ctx.get('computerUse') === registry` is false **while the claim works
+  perfectly**. Assert on the registry's `providerName`, not on identity.
+- **Version skew, stated rather than hidden.** The registry loaded here is
+  `@deepseek-ai/dsh-computer-use` **0.1.7-alpha.1** from the checkout, and the
+  checkout is a partial install — its `packages/computer-use/computer-use` had no
+  `node_modules` link, so a single `@deepseek-ai/cordis` symlink (exactly what
+  pnpm would create) was added to load its source and **removed afterwards**. The
+  packaged application runs 0.1.6-alpha.2 and has no copy of the service to
+  compare against, so this is the reference implementation, not the shipped one.
+
+That closes item 4 as far as this machine can close it. What remains genuinely
+unreachable is the same thing §9 said: a *live host* claim, which needs the
+service installed into the application's tree — and this is a check that can be
+run again whenever someone does that.
 
 ## Related
 

@@ -193,13 +193,27 @@ called, and a duplicate registration is the registry's own error. The provider
 name is fixed rather than configurable, because the registry's duplicate message
 is only useful if the name is stable.
 
-**Measured on macOS: no profile on this machine mounts the service.** The provider
-lives in the harness's own `packages/computer-use/computer-use`, and `--dump-config`
-over `desktop`, `web`, and `headless` reports zero `computerUse` rows in every one
-of them. So the branch a live host actually takes is the graceful absence path —
-which is the point of reaching the service through `ctx.get` — and the claim
-branch is asserted in-process against a stub rather than by a running
-composition. A live claim needs a profile that bundles the service.
+**Measured on macOS: no profile on this machine mounts the service, and the
+packaged application does not ship it.** The provider lives in the harness's own
+`packages/computer-use/computer-use`; `--dump-config` over `desktop`, `web`, and
+`headless` reports zero `computerUse` rows in every one of them, and the
+application's bundled tree carries 275 `@deepseek-ai` packages with no
+`dsh-computer-use` among them — so a live host claim would be an install, not a
+composition row. The branch a live host takes is the graceful absence path, which
+is the point of reaching the service through `ctx.get`.
+
+**The claim is no longer asserted only against a stub.** The registry's own source
+and this plugin's built bundle now run in one real cordis context, driven through
+the plugin's own `apply()`: the slot goes `undefined → "cua" → undefined` across
+the claim and the plugin's disposal, and every wrong ordering fails loudly with the
+registry's own `computer use provider "cua" is already registered` — a repeat
+registration, a second `apply()`, and a foreign provider registered first, where the
+plugin refuses to load at all. 13/13 checks. The registry loaded was
+0.1.7-alpha.1 from the checkout, which is a partial install; the service is not
+installed anywhere else on this machine, so that is the reference implementation
+rather than the shipped one. One trap for a repeat run: `ctx.get('computerUse')`
+returns cordis's traceable wrapper, not the registry instance, so an identity
+assertion fails while the claim works — read `providerName` instead.
 
 ## 3. Test coverage and CI — **done, except CI**
 
