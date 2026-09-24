@@ -277,6 +277,106 @@ struct ApplicationRankingTests {
     }
 }
 
+@Suite("application listing")
+struct ApplicationListingTests {
+
+    /// The measured defect: eleven WebKit content processes of one page-hosting
+    /// app, all sharing a bundle id, listed as eleven rows a model cannot tell
+    /// apart. One application is one row.
+    @Test("processes sharing a bundle id fold into one row")
+    func foldsDuplicates() {
+        let instances = (0..<11).map { offset in
+            MacHost.ApplicationInstance(
+                bundleId: "com.apple.WebKit.WebContent",
+                pid: Int32(100 + offset),
+                active: false,
+                hidden: false,
+                hasWindow: false
+            )
+        }
+        let rows = MacHost.applicationRows(instances)
+        #expect(rows.count == 1)
+        #expect(rows[0].identity == "com.apple.WebKit.WebContent")
+    }
+
+    /// Distinct applications must stay distinct, or the fold would hide the
+    /// thing the caller asked for.
+    @Test("distinct bundle ids stay distinct")
+    func keepsDistinctApplications() {
+        let rows = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.apple.finder", pid: 1, active: false, hidden: false, hasWindow: true),
+            MacHost.ApplicationInstance(bundleId: "com.apple.dock", pid: 2, active: false, hidden: false, hasWindow: true),
+        ])
+        #expect(rows.count == 2)
+        #expect(rows.map(\.identity) == ["com.apple.finder", "com.apple.dock"])
+    }
+
+    /// A process with no bundle id has no identity beyond itself, so it must not
+    /// be merged with another identity-less process.
+    @Test("a process with no bundle id stands alone")
+    func identitylessProcessesStandAlone() {
+        let rows = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: nil, pid: 7, active: false, hidden: false, hasWindow: false),
+            MacHost.ApplicationInstance(bundleId: "", pid: 8, active: false, hidden: false, hasWindow: false),
+        ])
+        #expect(rows.count == 2)
+        #expect(rows.map(\.identity) == ["pid:7", "pid:8"])
+    }
+
+    /// The row has to carry a pid a caller can act on: the process the user is
+    /// looking at outranks a windowless helper listed first.
+    @Test("the active process wins the row")
+    func activeProcessWins() {
+        let rows = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 10, active: false, hidden: false, hasWindow: false),
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 11, active: true, hidden: false, hasWindow: true),
+        ])
+        #expect(rows.count == 1)
+        #expect(rows[0].representative == 1)
+    }
+
+    /// A process owning a window beats one that merely is not hidden, because a
+    /// window is what the other tools can address.
+    @Test("a window owner outranks a windowless process")
+    func windowOwnerOutranksWindowless() {
+        let rows = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 20, active: false, hidden: false, hasWindow: false),
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 21, active: false, hidden: false, hasWindow: true),
+        ])
+        #expect(rows[0].representative == 1)
+    }
+
+    /// The row describes the application, not the one process that lent it a
+    /// pid: a helper that is hidden must not make a visible application read as
+    /// hidden, and a hidden application stays hidden only if all of it is.
+    @Test("active and hidden describe the whole application")
+    func stateIsFoldedAcrossProcesses() {
+        let visible = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 30, active: false, hidden: true, hasWindow: false),
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 31, active: true, hidden: false, hasWindow: true),
+        ])
+        #expect(visible[0].active)
+        #expect(!visible[0].hidden)
+
+        let allHidden = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 40, active: false, hidden: true, hasWindow: false),
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 41, active: false, hidden: true, hasWindow: false),
+        ])
+        #expect(!allHidden[0].active)
+        #expect(allHidden[0].hidden)
+    }
+
+    /// A tie must not depend on the window server's listing order.
+    @Test("a tie keeps the earlier process")
+    func tiesKeepTheEarlierProcess() {
+        let rows = MacHost.applicationRows([
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 50, active: false, hidden: false, hasWindow: true),
+            MacHost.ApplicationInstance(bundleId: "com.example.app", pid: 51, active: false, hidden: false, hasWindow: true),
+        ])
+        #expect(rows[0].representative == 0)
+    }
+}
+
 @Suite("pointer buttons")
 struct PointerButtonTests {
 

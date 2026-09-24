@@ -128,16 +128,35 @@ final class MacHost: PlatformHost, @unchecked Sendable {
         var seen = Set<String>()
 
         if runningOnly {
-            for app in NSWorkspace.shared.runningApplications {
-                if !includeBackground, app.activationPolicy == .prohibited { continue }
-                let name = app.localizedName ?? ""
-                let bundleId = app.bundleIdentifier ?? ""
-                if let query, !query.isEmpty,
-                   !name.lowercased().contains(query), !bundleId.lowercased().contains(query) {
-                    continue
+            // Which processes own a window on screen, so the pid a row carries
+            // is one a caller can act on even when the window server lists a
+            // windowless helper of the same application first.
+            let windowOwners = Self.onScreenWindowOwners()
+            let candidates: [(app: NSRunningApplication, instance: ApplicationInstance)] =
+                NSWorkspace.shared.runningApplications.compactMap { app in
+                    if !includeBackground, app.activationPolicy == .prohibited { return nil }
+                    let name = app.localizedName ?? ""
+                    let bundleId = app.bundleIdentifier ?? ""
+                    if let query, !query.isEmpty,
+                       !name.lowercased().contains(query), !bundleId.lowercased().contains(query) {
+                        return nil
+                    }
+                    let pid = app.processIdentifier
+                    return (app, ApplicationInstance(
+                        bundleId: bundleId,
+                        pid: pid,
+                        active: app.isActive,
+                        hidden: app.isHidden,
+                        hasWindow: windowOwners.contains(pid)
+                    ))
                 }
-                seen.insert(bundleId.isEmpty ? "pid:\(app.processIdentifier)" : bundleId)
-                rows.append(encode(app: app))
+            // One row per application, not per process. The fold happens before
+            // anything is encoded: a row naming one of eleven WebKit content
+            // processes names nothing a caller can tell from the other ten.
+            for row in Self.applicationRows(candidates.map(\.instance)) {
+                seen.insert(row.identity)
+                let app = candidates[row.representative].app
+                rows.append(encode(app: app, active: row.active, hidden: row.hidden))
             }
         }
         if !runningOnly {
@@ -175,7 +194,11 @@ final class MacHost: PlatformHost, @unchecked Sendable {
     }
 
     /// Encode one running application.
-    func encode(app: NSRunningApplication) -> JSONValue {
+    ///
+    /// `active` and `hidden` are passed in when the row describes an
+    /// *application* rather than one process: the process that lends the row
+    /// its pid need not be the one that is frontmost or visible.
+    func encode(app: NSRunningApplication, active: Bool? = nil, hidden: Bool? = nil) -> JSONValue {
         // Bound to locals first: a long literal reaching through optional chains
         // on `NSRunningApplication` is slow enough for the type checker to give
         // up, and the names are part of the tool's public vocabulary anyway.
@@ -183,6 +206,8 @@ final class MacHost: PlatformHost, @unchecked Sendable {
         let bundleId: JSONValue = .string(app.bundleIdentifier ?? "")
         let pid: JSONValue = .int(Int(app.processIdentifier))
         let policy: JSONValue = .string(Self.policyName(app.activationPolicy))
+        let isActive = active ?? app.isActive
+        let isHidden = hidden ?? app.isHidden
         var path: JSONValue?
         if let url = app.bundleURL {
             path = .string(url.path)
@@ -196,9 +221,9 @@ final class MacHost: PlatformHost, @unchecked Sendable {
             "bundleId": bundleId,
             "pid": pid,
             "path": path,
-            "active": .bool(app.isActive),
-            "frontmost": .bool(app.isActive),
-            "hidden": .bool(app.isHidden),
+            "active": .bool(isActive),
+            "frontmost": .bool(isActive),
+            "hidden": .bool(isHidden),
             "terminated": .bool(app.isTerminated),
             "policy": policy,
             "launchDate": launchDate,
@@ -399,6 +424,26 @@ final class MacHost: PlatformHost, @unchecked Sendable {
         ), query)
     }
 
+    /// The pids that own a window currently on screen.
+    ///
+    /// Only the owner pid is read, which the window server returns without
+    /// Screen Recording permission — window *titles* are what that grant
+    /// protects, and nothing here needs them. An empty answer (no permission,
+    /// or no windows) is not an error: it only costs the listing its preference
+    /// for a process that owns a window, and the ranking falls back to
+    /// visibility.
+    static func onScreenWindowOwners() -> Set<pid_t> {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        var owners = Set<pid_t>()
+        for entry in list {
+            if let pid = entry[kCGWindowOwnerPID as String] as? pid_t { owners.insert(pid) }
+        }
+        return owners
+    }
+
     /// Match one accessibility window frame against the window server's list,
     /// which is the only source of the `CGWindowID` that capture needs.
     static func matchWindowID(pid: pid_t, frame: CGRect) -> CGWindowID? {
@@ -421,6 +466,111 @@ final class MacHost: PlatformHost, @unchecked Sendable {
             }
         }
         return best?.id
+    }
+
+    /// One running process, reduced to the facts that decide which of an
+    /// application's processes becomes its row.
+    ///
+    /// Split out from `NSRunningApplication` for the same reason
+    /// `ApplicationCandidate` is: which process represents an application is a
+    /// property of these facts and not of anything AppKit knows, so the rule can
+    /// be tested without a desktop.
+    struct ApplicationInstance: Equatable {
+        /// Bundle identifier, or `""` when the process has none.
+        let bundleId: String
+        let pid: Int32
+        /// Whether this process is the active (frontmost) one.
+        let active: Bool
+        /// Whether this process is hidden.
+        let hidden: Bool
+        /// Whether this process owns a window on screen.
+        let hasWindow: Bool
+
+        init(bundleId: String?, pid: Int32, active: Bool, hidden: Bool, hasWindow: Bool) {
+            self.bundleId = bundleId ?? ""
+            self.pid = pid
+            self.active = active
+            self.hidden = hidden
+            self.hasWindow = hasWindow
+        }
+
+        /// What makes two processes the same application.
+        ///
+        /// A process with no bundle id has no identity beyond itself, so it
+        /// stands alone rather than being merged with something it merely
+        /// resembles — the rule the Windows backend applies to a process whose
+        /// image it cannot read, for the same reason.
+        var identity: String { bundleId.isEmpty ? "pid:\(pid)" : bundleId }
+    }
+
+    /// One row of `cua_apps`: which process lends it a pid, and the state of the
+    /// application as a whole.
+    struct ApplicationRow: Equatable {
+        /// The identity the row's processes were folded under.
+        let identity: String
+        /// Index into the instance list this row was built from.
+        let representative: Int
+        /// Whether *any* process of the application is active.
+        let active: Bool
+        /// Whether *every* process of the application is hidden.
+        let hidden: Bool
+    }
+
+    /// Which of two processes is the better face for its application.
+    ///
+    /// The order mirrors the Windows backend's: the process the user is actually
+    /// looking at, else one that owns a window a caller could address, else one
+    /// that is merely not hidden, and only failing all of those a hidden one.
+    static func instanceRank(_ instance: ApplicationInstance) -> Int {
+        if instance.active { return 0 }
+        if instance.hasWindow { return 1 }
+        return instance.hidden ? 3 : 2
+    }
+
+    /// One row per application, not per process.
+    ///
+    /// A macOS application is frequently several processes, and the window
+    /// server lists every one of them separately: a browser runs a content
+    /// process per page, an Electron app a renderer per window, and plenty of
+    /// system agents a windowless helper. Reported process by process, `cua_apps`
+    /// listed `“QQ音乐”网页内容` eleven times under one bundle id — measured, not
+    /// supposed — and rows a model cannot tell apart are rows it cannot act on,
+    /// because every one of them names the same thing.
+    ///
+    /// A row keeps the pid of the process best placed to be acted on, while
+    /// `active` and `hidden` describe the application rather than that one
+    /// process: a frontmost application whose listed process was a hidden helper
+    /// would otherwise read as neither.
+    ///
+    /// - Parameter instances: every matching process, in the caller's order.
+    /// - Returns: one row per distinct identity, in first-appearance order.
+    static func applicationRows(_ instances: [ApplicationInstance]) -> [ApplicationRow] {
+        var index: [String: Int] = [:]
+        var rows: [ApplicationRow] = []
+        for (offset, instance) in instances.enumerated() {
+            let key = instance.identity
+            guard let existing = index[key] else {
+                index[key] = rows.count
+                rows.append(ApplicationRow(
+                    identity: key,
+                    representative: offset,
+                    active: instance.active,
+                    hidden: instance.hidden
+                ))
+                continue
+            }
+            let kept = rows[existing]
+            // Strictly better, so a tie keeps the earlier process and the result
+            // does not depend on the window server's listing order.
+            let better = instanceRank(instance) < instanceRank(instances[kept.representative])
+            rows[existing] = ApplicationRow(
+                identity: key,
+                representative: better ? offset : kept.representative,
+                active: kept.active || instance.active,
+                hidden: kept.hidden && instance.hidden
+            )
+        }
+        return rows
     }
 
     /// Resolve the applications a request refers to.

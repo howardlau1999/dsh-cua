@@ -87,7 +87,10 @@ cua_status
 ```
 
 Expect a report naming the engine version and this platform's backend —
-`macos-ax` on macOS, `windows-uia` on Windows (engine 0.2.0) — and its
+`macos-ax` on macOS (engine `0.1.0`), `windows-uia` on Windows (engine `0.2.0`);
+the two backends carry independent versions by design, and
+[`engine-contract.md`](packages/dsh-plugin-cua/docs/engine-contract.md) is the
+table that says so — and its
 permissions. The failure this catches is a plugin that never loaded or an engine
 that never spawned, both of which look like "the tools do not exist".
 

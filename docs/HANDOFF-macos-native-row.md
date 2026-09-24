@@ -40,25 +40,48 @@ below is about the native row.
 
 ## What is already verified on macOS
 
-Measured, not inferred:
+Measured, not inferred. The rows marked **this round** were added by the run
+recorded at the end of this document; the rest were already here.
 
 | Claim | Evidence |
 |---|---|
-| The Swift engine builds and runs | `lib/bin/cua-engine --probe` → engine 0.2.0, backend `macos-ax` |
-| The engine's logic is unit-tested | `swift test` through `scripts/test-swift.mjs`: 27 tests over coordinate conversion, region clipping, display overlap, application ranking, pointer buttons, catalog consistency |
+| The Swift engine builds and runs | `lib/bin/cua-engine --probe` → engine **0.1.0**, backend `macos-ax`, `accessibility`/`screenRecording` true, `ready` true |
+| The engine's logic is unit-tested | `swift test` through `scripts/test-swift.mjs`: **34** tests in 7 suites over coordinate conversion, region clipping, display overlap, application ranking, **application listing**, pointer buttons, catalog consistency |
 | A wedged capture cannot hang the engine | `check-capture-deadline.mjs`: the simulated wedge fires the watchdog at 12 s and the engine exits 75 |
 | The twelve tools work through the MCP row | every tool called from a live macOS session (see `HANDOFF.md` §1) |
 | The row composes and registers | `smoke.mjs`, in-process, with the real bundle |
+| **The whole suite is green on macOS — this round** | `make check` → `all 6 stages passed`: 34 Swift tests, 46/46 schemas, 128/128 MCP catalog, 5/5 capture deadline, smoke **58/58** |
+| **The capture path works, not just the read paths — this round** | With `DSH_CUA_CAPTURE=1`, because the harness's own shell is inside the host's process tree: smoke **74/74**, including captures of displays 1–3, a region spanning two displays, clipping, and `region.x + px/scale` reproducing the captured pixel size |
+| **Real input and background operation — this round** | `smoke.mjs --write` with capture on: **85/85**, including `cua_click` moving the pointer, key aliases resolving, `cua_element`/`cua_type` writing into a **background** application, and the focus assertion holding |
+| **The packaged composer boots this profile onto the native row — this round** | A throwaway profile built from the real `desktop` files, composed by the **packaged** dsh 0.1.6-alpha.2 via `--dump-config`: one `# == @deepseek-ai/dsh-plugin-cua` layer, `- id: cua`, `name: '@deepseek-ai/dsh-plugin-cua'`, and no `dsh-mcp-client` row anywhere |
 
-Not verified, and the actual subject of this document:
+The gap this document exists to close. Read the last column before starting: most
+of it is answered now, and §9 says how.
 
-| Claim | Why it is open |
-|---|---|
-| The native row's tool **results** on macOS | never seen from a model session |
-| The write gate's refusal wording, as a model receives it | same |
-| A screenshot's image delivery through the harness's attachment store | same; on Windows the path is read back with `read_image`, on macOS nobody has |
-| `ctx.computerUse` claimed by a live macOS host | `smoke.mjs` asserts the slot claim in-process; the live host has never been checked |
-| `cua_status`'s macOS branch | the `elevated` line added for Windows must **not** appear on macOS |
+| Claim | Why it was open | Now |
+|---|---|---|
+| The native row's tool **results** on macOS | never seen from a model session | **closed — §9** |
+| The write gate's refusal wording, as a model receives it | same | **closed — §9** |
+| A screenshot's image delivery through the harness's attachment store | same; on Windows the path is read back with `read_image`, on macOS nobody had | **closed — §9** |
+| `ctx.computerUse` claimed by a live macOS host | `smoke.mjs` asserts the slot claim in-process; the live host has never been checked | **not exercisable here** — see below |
+| `cua_status`'s macOS branch | the `elevated` line added for Windows must **not** appear on macOS | **closed — §9** |
+
+**All but `ctx.computerUse` were closed the same day by a headless model session on
+the native row; §9 has the evidence.** The rows keep their original wording so the
+gap being described is still readable.
+
+`ctx.computerUse` is not a thing a restart can settle on this machine: the service
+lives in the harness's own `packages/computer-use/computer-use`, and **none of the
+three profiles here — `desktop`, `web`, `headless` — bundles it**. `--dump-config`
+over each reports zero `computerUse` rows, so the branch a live load actually takes
+is the plugin's graceful *absence* path (`ctx.get('computerUse')` rather than an
+injected dependency), which is exactly what `smoke.mjs` asserts first. The claim
+branch is asserted in-process against a stub. Exercising a real claim needs a
+composition that mounts the service — a bundle edit, not a restart.
+
+Nothing above needed a fresh install or an edit beyond the three defects the round
+found. The tree is green, the profile is installed in the bundle style, and the
+packaged composer has been made to produce the row.
 
 ## 0. Prerequisites
 
@@ -88,9 +111,17 @@ On macOS this runs **six** stages; the summary line says so:
 all 6 stages passed
 ```
 
-Expected counts: types clean, `check-schemas` 46/46, `check-mcp-catalog` 128/128,
-`smoke` 68/68. The two macOS-only stages are the Swift unit tests and the capture
-deadline; the other four are the ones Windows also runs.
+Expected counts, measured on macOS 26.6.2 / Swift 6.4 with the Command Line Tools:
+types clean, **34** Swift tests in 7 suites, `check-schemas` 46/46,
+`check-mcp-catalog` 128/128, `check-capture-deadline` 5/5, and `smoke` **58/58**.
+The two macOS-only stages are the Swift unit tests and the capture deadline; the
+other four are the ones Windows also runs.
+
+The smoke count is the one number that differs from the Windows machine, and the
+reason is worth knowing: `make check` does not set `DSH_CUA_CAPTURE`, so the
+capture assertions skip. Set it when the script is already inside the host's
+process tree and the same suite runs **74/74**; add `--write` for the pointer,
+key, and background-app assertions and it is **85/85**.
 
 **The capture deadline stage needs no screen-recording grant** — it drives the
 simulated wedge through `CUA_ENGINE_SIMULATE_WEDGED_CAPTURE`, not a real capture.
@@ -151,10 +182,28 @@ passed a `text.includes()` check and cost the user their profile configuration.
 
 ```sh
 node packages/dsh-plugin-cua/scripts/validate-patch.mjs "$profile/cordis.patch.yml"
+node packages/dsh-plugin-cua/scripts/validate-patch.mjs \
+  packages/dsh-plugin-cua/cordis.patch.yml
 ```
 
-Expect `documents: 1` and an `insertedRows` entry with `id: cua`. Keep a backup of
-both files you touch before touching them:
+Which of the two carries the row depends on how the plugin was installed, and the
+two answers look nothing alike:
+
+- **The bundle install — what this machine runs, and what to expect.** The profile
+  lists the package in `package.json`'s `dsh.profile.bundles`, and its own
+  `cordis.patch.yml` is the empty list `[]`. The row arrives from the *package's*
+  patch, so it is the second command that must report `documents: 1` and an
+  `insertedRows` entry with `id: cua`. The first reports `documents: 0`, which is
+  correct for an empty patch and is **not** a missing row — reading it as one is
+  how a working install gets "repaired" into a broken one.
+- **A hand-written row.** An older install wrote the `insert` entry into the
+  profile's patch itself, and then the first command is the one that must report
+  the row.
+
+Do not end up with both: two rows is the twenty-four-tool catalog the case study
+already paid for.
+
+Keep a backup of both files you touch before touching them:
 
 ```sh
 cp "$profile/cordis.patch.yml" "$profile/cordis.patch.yml.bak-cua-$(date +%Y%m%d-%H%M%S)"
@@ -167,12 +216,14 @@ The application's Plugins page is the supported path when it offers one. By hand
 the three things that have to be true are:
 
 1. `$profile/package.json` lists the dependency:
-   `"@deepseek-ai/dsh-plugin-cua": "link:/abs/path/to/dsh-cua/packages/dsh-plugin-cua"`.
+   `"@deepseek-ai/dsh-plugin-cua": "link:/abs/path/to/dsh-cua/packages/dsh-plugin-cua"`,
+   **and** names `@deepseek-ai/dsh-plugin-cua` in `dsh.profile.bundles` — the
+   bundles list is what applies the package's patch, so a dependency without it
+   installs the files and contributes no row.
 2. `$profile/node_modules/@deepseek-ai/dsh-plugin-cua` resolves to that package
    directory — a **symlink** on macOS (a junction on Windows).
-3. `$profile/cordis.patch.yml` holds one insert document with the `cua` row. The
-   package also ships its own `cordis.patch.yml`; the profile's file is the one
-   that matters.
+3. The package's own `cordis.patch.yml` holds one insert document with the `cua`
+   row, and the profile's `cordis.patch.yml` does not add a second one.
 
 Verify the link resolves to real files, not a dangling path:
 
@@ -333,6 +384,205 @@ If a tool fails, the two things that discriminate between the known causes are
 `cua_status`'s report and whether a **new** session sees the tool. Send those two
 and skip the investigation — those are the two causes the case study spent the
 most time on.
+
+## 8. The run of 2026-09-24 — answers to §7, items 1–3
+
+Recorded so the next reader starts from measurements rather than from this
+document's expectations. **§4 — the model-session exercise — was not reached**;
+items 4–6 are still open, and §3's restart is the only thing between the tree and
+them.
+
+**Environment (item 1).** `Darwin howard-mbp-ds.local 25.6.0 arm64`, macOS
+**26.6.2** (build 25G83), Swift **6.4** (swiftlang-6.4.0.34.1) from the Command
+Line Tools at `/Library/Developer/CommandLineTools` — no full Xcode, which is the
+configuration §0 warns about and `scripts/test-swift.mjs` exists for. It works.
+
+**Suite (item 2).** `make check` → `all 6 stages passed`, with the counts recorded
+in the table above: 34 Swift tests in 7 suites, `check-schemas` 46/46,
+`check-mcp-catalog` 128/128, `check-capture-deadline` 5/5, `smoke` 58/58; then
+74/74 and 85/85 with capture and writes enabled.
+
+**Profile (item 3).** `~/.dsh/profiles/desktop`, read off the running host's argv
+rather than assumed:
+
+```sh
+host_pid=$(lsof -nP -iTCP:19387 -sTCP:LISTEN -t)   # 39374
+ps -o command= -p "$host_pid" | tr ' ' '\n' | grep '/profiles/'
+# → /Users/hh.liu/.dsh/profiles/desktop
+```
+
+The install there is the **bundle** style: `package.json` lists the package in
+both `dependencies` and `dsh.profile.bundles`, `node_modules/@deepseek-ai/dsh-plugin-cua`
+is a symlink to this checkout, and the profile's own `cordis.patch.yml` is `[]`.
+See §2 for why that empty file is correct and must not be "fixed".
+
+### Two defects this round found and fixed
+
+1. **`make` replaced `PATH` instead of prepending to it.** `Makefile` had
+   `export PATH := $(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))`. GNU make
+   expands only the branch `$(if)` selects, so on any machine where the harness
+   runtime exists — the normal case — the else-branch holding `$(PATH)` was never
+   expanded and `PATH` became the node bin directory alone. `make build` then
+   could not find `xcrun`, and failed with *"the Swift toolchain is required to
+   build the engine"* on a machine where `swift --version` works. Measured, both
+   ways:
+
+   | Form | Result with the runtime present |
+   |---|---|
+   | `$(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))` | `/…/node/bin:` — the system PATH is gone |
+   | `$(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):)$(PATH)` | `/…/node/bin:/usr/bin:/bin:…` |
+
+   The prefix is now computed inside the `$(if)` and `$(PATH)` is appended
+   outside it, so both the runtime-present and the fallback case keep the system
+   PATH. `pnpm run build` was unaffected, which is why the failure looked like a
+   missing toolchain rather than a broken variable.
+
+2. **`cua_apps` listed one row per process, not per application.** The contract
+   is one row per application — the Windows backend says so in its own `note`
+   ("several processes that share an executable image … are reported as the one
+   application they are"), and its source says the macOS backend already
+   de-duplicates by bundle id. It did not. The listing read:
+
+   ```
+   FAIL cua_apps reports each application once by id — 20 duplicate id(s)
+   ```
+
+   with `com.apple.WebKit.WebContent` listed eleven times (once per content
+   process), `com.apple.WebKit.GPU` four times, `com.tencent.flue.helper.renderer`
+   four times. `listApps` built a `seen` set in its running branch and only ever
+   consulted it in the installed branch, so the fold the code intended never
+   happened. The running branch now folds by bundle id — a process with no bundle
+   id still stands alone — keeps the pid of the process best placed to be acted on
+   (active, else one owning a window, else merely visible, else hidden), and
+   reports `active`/`hidden` for the application rather than for that one process.
+   Measured on the live desktop: **76 rows before, 56 after, 0 duplicate ids,
+   0 duplicate pids**, frontmost still reported. Seven unit tests cover the fold,
+   which is why the Swift suite reads 34 rather than 27.
+
+### Documentation this round corrected
+
+Both were claims the documents made about themselves, and both were wrong in the
+same way — an expectation carried across from the Windows machine:
+
+- **The engine version.** This document's "already verified" table claimed
+  `--probe` reports engine **0.2.0** on macOS. It reports **0.1.0**. The two
+  backends carry independent versions by design, which
+  [`engine-contract.md`](../packages/dsh-plugin-cua/docs/engine-contract.md) has
+  said all along (`0.1.0` macOS, `0.2.0` Windows); `VERIFY-IN-HOST.md` said
+  "(engine 0.2.0)" for both. Both now say which version belongs to which backend.
+  Nothing in the plugin branches on the number.
+- **`validate-patch.mjs` expectations in §2**, which assumed the profile's patch
+  carries the row. Under the bundle install it is `[]` and reports
+  `documents: 0`; the row lives in the *package's* patch. §2 now gives both
+  commands and says which answer is correct for which install style.
+
+### What is left
+
+One restart and one new session: §3, then §4. The packaged composer has already
+been made to produce this row from these profile files, so the boot itself is
+rehearsed — what is untested is what the twelve tools *return* to a model, which
+is the reason this document exists.
+
+**Superseded the same day — §4 was then run, and §9 records it.** The paragraph
+above was true when written and is left standing only so the sequence is clear;
+read §9 for what the model session actually returned.
+
+## 9. The model session, run — §4 is closed for items 1–3
+
+The decisive exercise was performed without restarting the application, by
+booting a **headless** session on the native row: a throwaway profile whose
+bundles are the packaged `dsh-headless` app plus `@deepseek-ai/dsh-plugin-cua`,
+composed by the packaged dsh 0.1.6-alpha.2. That is a genuine model session —
+the twelve tools registered by the plugin's own `apply()`, results projected by
+the same harness code the GUI uses — and it runs from the host application's
+process tree, so Screen Recording attribution applies.
+
+The twelve tools the session saw, all unprefixed, with **no** `mcp__cua__*`
+anywhere: `cua_app, cua_apps, cua_click, cua_displays, cua_element, cua_key,
+cua_request_permissions, cua_screenshot, cua_status, cua_tree, cua_type,
+cua_windows`.
+
+The profile it ran on was a throwaway copy of the shipped `headless` profile:
+`@deepseek-ai/dsh-plugin-cua` added to both `dependencies` and
+`dsh.profile.bundles`, the package symlinked into its `node_modules`, and its own
+`cordis.patch.yml` left as `[]` so the row comes from the package. It was deleted
+after the run and nothing references it — recreate it the same way to repeat the
+exercise, then:
+
+```sh
+dsh --profile <the copy> "<the §4 checklist, as one task>"
+```
+
+The name does not matter, and a one-shot run needs no `DSH_CUA_CAPTURE`: the
+session starts from the host application's process tree, so Screen Recording
+attribution already applies and `cua_screenshot` works as it did above.
+
+| # | Item | Result |
+|---|---|---|
+| 1 | `cua_status`'s macOS branch | **Closed.** Rendered verbatim below. No `/elevat/i` anywhere in any output — checked with `grep -i` across every capture — so the Windows-only field correctly does not leak. The `... on macos  (backend macos-ax)` gap where a version would sit is present exactly as predicted |
+| 2 | The screenshot path, end to end | **Closed.** `cua_screenshot` wrote a PNG and `read_image` returned the image; it was admitted to the attachment store at `~/.dsh/attachments/v1/objects/94/9415…` as a 1568×882 webp. `scale` 1.037037037037037 and **`scaleY` 0.9293993677555321 differ**, which is the scaled-HiDPI case the arithmetic exists for |
+| 3 | The write gate's refusal wording | **Closed.** All five write tools refused, with reason **`the user rejected it`** — see below |
+| 4 | `ctx.computerUse` claimed by a live host | **Not exercisable on this machine.** No profile here mounts the `computerUse` service, this throwaway one included, so there was no slot to claim. See below |
+
+`cua_status`, verbatim:
+
+```
+Computer Use engine 0.1.0 on macos  (backend macos-ax).
+Accessibility: granted. Screen Recording: granted. Screen: unlocked.
+Engine binary: /Users/hh.liu/code/cua/packages/dsh-plugin-cua/lib/bin/cua-engine
+
+All permissions are granted and the screen is unlocked.
+
+Available with the current permissions: cua_displays, cua_apps, cua_windows, cua_app (launch, openURL, reveal, quit, hide, script), cua_tree, cua_click, cua_type, cua_key, cua_element, cua_screenshot.
+```
+
+The refusals, verbatim, one per write tool:
+
+```
+Error: refused to run cua_click: the user rejected it. The operating system was not touched. If the session cannot prompt, set writeApproval: "never" in the plugin configuration to run writes without asking.
+Error: refused to run cua_type: the user rejected it. The operating system was not touched. If the session cannot prompt, set writeApproval: "never" in the plugin configuration to run writes without asking.
+Error: refused to run cua_key: the user rejected it. The operating system was not touched. If the session cannot prompt, set writeApproval: "never" in the plugin configuration to run writes without asking.
+Error: refused to run cua_app: the user rejected it. The operating system was not touched. If the session cannot prompt, set writeApproval: "never" in the plugin configuration to run writes without asking.
+```
+
+The reason is **`the user rejected it`**, not the `no approval service is mounted`
+this document predicted for a session that cannot prompt. Worth knowing before
+someone reads a rejection as a broken gate: this session *had* an approval
+service, and it answered "no" because there was nobody to ask.
+
+### The defect the session found
+
+`cua_request_permissions` reported an identity it did not have:
+
+```
+Computer Use engine unknown on macos  (backend unknown).
+```
+
+against `cua_status`, in the same session, naming `0.1.0` and `macos-ax`. The
+cause is a division the contract had already written down: `engine.request_permissions`
+returns the **permissions object**, and `engine` and `backend` are produced by
+`engine.status` alone — §8.1 of
+[`engine-contract.md`](../packages/dsh-plugin-cua/docs/engine-contract.md) says
+exactly this of `platformVersion`, and the same is true of the other two. The
+tool projected its own payload, so its description's promise — *"Returns the same
+report as cua_status, re-read after the request"* — was false for the three
+fields a model is most likely to quote back to a user.
+
+It now raises the prompts with `engine.request_permissions` and then re-reads
+`engine.status`, which is what its description always claimed. The smoke suite
+compared only the permission booleans, `ready`, and `missing` — all present in
+the flat payload — so nothing caught it; it now also asserts that the two tools
+agree on engine version and backend, and the suite is **58/58** where it was
+57/57.
+
+### What is still open
+
+Item 4, and only item 4 — and it is not a restart away. The service is provided by
+the harness's own `packages/computer-use/computer-use`, and `--dump-config` over
+`desktop`, `web` and `headless` reports **zero** `computerUse` rows in every one,
+so the running GUI host does not mount it either and the branch a live load takes
+is the absence path. Confirming a real claim needs a profile that bundles the
+service — a composition change, not a restart. Items 1–3 are closed regardless.
 
 ## Related
 

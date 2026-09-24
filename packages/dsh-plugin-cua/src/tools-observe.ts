@@ -97,7 +97,16 @@ function requestPermissionsTool(tools: ToolContext): ToolDefinition {
       render: (_args, value) => text(renderStatus(value)),
     },
     async execute(_args, exec) {
-      const raw = await tools.engine.request<Record<string, unknown>>({ method: 'engine.request_permissions', timeoutMs: 20_000, signal: exec.signal })
+      // Raise the prompts first, then re-read the *status* rather than projecting
+      // this call's own payload. `engine.request_permissions` returns the
+      // permissions object, which carries no engine identity — `engine` and
+      // `backend` are produced by `engine.status` alone (engine-contract.md §8.1
+      // says the same of `platformVersion`). Projecting the request payload made
+      // this tool answer `engine unknown on macos  (backend unknown)` while
+      // `cua_status`, in the same session, answered `engine 0.1.0 … macos-ax`,
+      // which is not the "same report as cua_status" the description promises.
+      await tools.engine.request<Record<string, unknown>>({ method: 'engine.request_permissions', timeoutMs: 20_000, signal: exec.signal })
+      const raw = await tools.engine.request<Record<string, unknown>>({ method: 'engine.status', timeoutMs: 10_000, signal: exec.signal })
       return projectStatus(raw, tools)
     },
   })

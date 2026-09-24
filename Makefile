@@ -14,7 +14,13 @@ NODE         := $(if $(DSH_NODE_BIN),$(DSH_NODE_BIN)/node,node)
 PNPM         := $(if $(DSH_PNPM_JS),$(NODE) $(DSH_PNPM_JS),pnpm)
 PKG          := packages/dsh-plugin-cua
 
-export PATH := $(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))
+# Prepend, never replace. `$(if)` expands only the branch it selects, so
+# `$(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))` discards the system PATH
+# entirely whenever the runtime is present — that branch is the one taken — and
+# `make build` then cannot find `xcrun` or `swift`. Build the prefix first and
+# append PATH outside the call.
+DSH_PATH_PREFIX := $(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):)
+export PATH := $(DSH_PATH_PREFIX)$(PATH)
 
 .PHONY: help build engine plugin typecheck check smoke smoke-writes
 

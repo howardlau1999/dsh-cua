@@ -79,11 +79,11 @@ Test suites, all green:
 
 | Suite | Covers |
 |---|---|
-| `swift test` (via `scripts/test-swift.mjs`) | 27 tests over the engine's pure logic: coordinate conversion, region clipping, display overlap, application ranking, pointer buttons, catalog consistency |
+| `swift test` (via `scripts/test-swift.mjs`) | **34** tests over the engine's pure logic: coordinate conversion, region clipping, display overlap, application ranking, application listing, pointer buttons, catalog consistency |
 | `check-schemas.mjs` | 46 checks: every TypeScript tool's parameter and output schema, through the harness's own validator |
 | `check-mcp-catalog.mjs` | 128 checks: the twelve tools the engine publishes over MCP, validated the same way and compared against the TypeScript catalog |
 | `check-capture-deadline.mjs` | 5 checks: a wedged capture aborts the engine within its bound |
-| `smoke.mjs` | 51 checks when it was written, **68 today**: the built bundle loaded and every tool called against the real engine |
+| `smoke.mjs` | 51 checks when it was written, **68 on Windows today**: the built bundle loaded and every tool called against the real engine. macOS runs 58 of them by default, 74 with `DSH_CUA_CAPTURE=1`, 85 with `--write` too |
 | `smoke.mjs --write` | Adds pointer movement, key delivery, and background read/write with a focus assertion |
 
 `make check` runs the first five. `make smoke-writes` adds the last.
@@ -193,6 +193,14 @@ called, and a duplicate registration is the registry's own error. The provider
 name is fixed rather than configurable, because the registry's duplicate message
 is only useful if the name is stable.
 
+**Measured on macOS: no profile on this machine mounts the service.** The provider
+lives in the harness's own `packages/computer-use/computer-use`, and `--dump-config`
+over `desktop`, `web`, and `headless` reports zero `computerUse` rows in every one
+of them. So the branch a live host actually takes is the graceful absence path —
+which is the point of reaching the service through `ctx.get` — and the claim
+branch is asserted in-process against a stub rather than by a running
+composition. A live claim needs a profile that bundles the service.
+
 ## 3. Test coverage and CI — **done, except CI**
 
 The twelve MCP tool definitions are now asserted
@@ -264,6 +272,49 @@ Still open:
   [`HANDOFF-macos-native-row.md`](HANDOFF-macos-native-row.md) is the procedure for
   closing it: what is already verified, what only a macOS model session can show,
   the exact commands, and what to report back.
+
+  **Everything around that session has since been verified on macOS, and it is
+  now one restart away** — §8 of that document records the run. All six stages
+  pass (`all 6 stages passed`); smoke is 58/58, 74/74 with `DSH_CUA_CAPTURE=1`,
+  and 85/85 with `--write` as well, which means capture, real pointer and key
+  input, and background-app writes are all measured on macOS rather than assumed.
+  A throwaway profile built from the real `desktop` files was composed by the
+  **packaged** dsh and produced the `cua` row and nothing else, so the boot is
+  rehearsed too. Three defects were found and fixed on the way:
+
+  1. **`make` replaced `PATH` rather than prepending to it.** `$(if)` expands
+     only the branch it selects, so `$(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))`
+     dropped the entire system PATH whenever the harness runtime was present —
+     which is the normal case — and `make build` failed claiming the Swift
+     toolchain was missing on a machine where `swift --version` works.
+     `pnpm run build` was unaffected, which is what made it look like a toolchain
+     problem.
+  2. **`cua_apps` listed one row per process, not per application.** The Windows
+     backend documents the contract and states that macOS already de-duplicates
+     by bundle id; it did not. `listApps` built a `seen` set in its running branch
+     and only consulted it in the installed branch. On the live desktop that was
+     20 duplicate ids — `com.apple.WebKit.WebContent` eleven times. Now folded by
+     bundle id: 76 rows before, 56 after, no duplicate id or pid, frontmost
+     preserved. Seven unit tests cover it.
+  3. **`cua_request_permissions` reported an identity it did not have** — found
+     by a model session on the native row, which is the exercise §4 of the macOS
+     document exists for. It answered `engine unknown on macos  (backend unknown)`
+     while `cua_status`, in the same session, answered `0.1.0` and `macos-ax`.
+     The contract had already drawn the line: `engine.request_permissions` returns
+     the *permissions* object, and `engine`/`backend` come from `engine.status`
+     alone (§8.1 says as much of `platformVersion`). The tool projected its own
+     payload, so its description's promise of "the same report as cua_status" was
+     false for the three fields a model is most likely to quote back. It now
+     re-reads `engine.status` after raising the prompts. The smoke suite compared
+     only the permission booleans, `ready`, and `missing` — all present in the
+     flat payload — so it now also asserts the two tools agree on engine version
+     and backend, which is the check that would have caught it.
+
+  One documentation defect came out of the same run and is the kind this project
+  keeps having to correct: the macOS document's "already verified" table claimed
+  `--probe` reports engine **0.2.0** on macOS, and it reports **0.1.0**. The two
+  backends carry independent versions by design — `engine-contract.md` has said
+  so all along — so the engine was right and the prose was wrong.
 - **The status projection is a hand-maintained list, and it silently drops what
   it does not name.** Windows reports `elevated`, `elevationAvailable`,
   `backendDetail`, and `sessionId`; `toPermissionReport` kept the twelve fields
@@ -317,11 +368,23 @@ failing on a path that was never there. `pnpm run check`, `pnpm run typecheck`,
 `pnpm run smoke` and friends are the portable spellings; they are what the README
 lists.
 
+That fallback had a bug of its own until the macOS round: `export PATH :=
+$(if $(DSH_NODE_BIN),$(DSH_NODE_BIN):,$(PATH))` expands only the branch `$(if)`
+selects, so when the runtime *was* present the else-branch never expanded and
+`PATH` became the node bin directory alone. `make build` then could not find
+`xcrun` and blamed the Swift toolchain. The prefix is now built inside the `$(if)`
+and `$(PATH)` appended outside it, so the system PATH survives on both paths.
+
 `pnpm run check` runs every stage that applies to the host. macOS runs six;
 Windows runs four — the Swift unit tests and the capture-wedge deadline both
 exercise macOS-only behaviour — and the summary says which:
-`all 4 stages passed (2 skipped on this platform)`. On this machine that is
-`check-schemas` 46/46, `check-mcp-catalog` 128/128, and `smoke` 68/68.
+`all 4 stages passed (2 skipped on this platform)`. On the Windows machine that is
+`check-schemas` 46/46, `check-mcp-catalog` 128/128, and `smoke` 68/68. On macOS it
+is the same two schema stages plus 34 Swift tests, 5 capture-deadline checks and
+`smoke` 58/58 — the difference is that `make check` leaves `DSH_CUA_CAPTURE`
+unset, so the capture assertions skip rather than run. Set it when the script is
+already inside the host's process tree and macOS reports 74/74, or 85/85 with
+`--write`.
 
 The engine is usable without the harness, which is how it gets debugged. Note
 the path: the handoff previously printed `lib/bin/cua-engine`, which is wrong —

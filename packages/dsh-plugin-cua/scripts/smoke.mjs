@@ -316,6 +316,17 @@ check(
   'cua_request_permissions reports the same missing set as cua_status',
   JSON.stringify(requested.missing),
 )
+// The identity fields are the ones the request payload does not carry at all:
+// `engine.request_permissions` returns the permissions object, and `engine` and
+// `backend` are produced by `engine.status` alone. Comparing only the permission
+// booleans let this tool render "engine unknown (backend unknown)" next to a
+// `cua_status` that named both — the report its own description calls "the same
+// report as cua_status".
+check(
+  requested.engineVersion === status.engineVersion && requested.backend === status.backend,
+  'cua_request_permissions reports the same engine identity as cua_status',
+  `request ${requested.engineVersion}/${requested.backend} vs status ${status.engineVersion}/${status.backend}`,
+)
 
 // ------------------------------------------------------- observation tools
 
