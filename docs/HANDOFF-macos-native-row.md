@@ -768,6 +768,46 @@ it. What remains unmeasured is only that a **new** session seeds it from
 seeded `danger-full-access` before. Rollback is the two profile backups plus
 restoring that line, and a relaunch.
 
+### The write gate's own knob: `session`, and proof that a patch edit reaches a running host
+
+The same profile patch then gained a second override, for the Computer Use row
+itself:
+
+```yaml
+- id: cua
+  config:
+    writeApproval: session
+    idleShutdownMs: 600000
+    allowedScript: false
+```
+
+`session` asks **once per write tool per session** and stops asking for that tool
+afterwards, where `always` — the value the package ships — prompts on every single
+write. The other value is `never`, which asks nothing at all and leaves the macOS
+grants as the only gate. Like the preset table, `writeApproval` is not a volatile
+field, so it belongs to this layer and not to `~/.dsh/settings.yaml`; the override
+restates `idleShutdownMs` and `allowedScript` with the package's own values so it
+is complete whether the loader merges the config or replaces it. `validate-patch.mjs`
+accepts both entries (`patchEntries: 2`, overrides for `permission` and `cua`), and
+`--dump-config` shows the composed row carrying `writeApproval: session` — with the
+package's patch still the only thing inserting the row, so the catalog stays twelve
+tools.
+
+Two things were then measured in the live GUI session, and the second is the one
+worth keeping:
+
+- The first `cua_click` logged `approval/asked` + `approval/decided
+  {"outcome":"allowed-once"}` — the per-session grant — and the call proceeded.
+- A second `cua_click` immediately after moved the pointer with **no
+  `approval/asked` event at all**, which is `session` behaving exactly as its own
+  doc comment says *and* proves a config-only patch edit reaches an already-running
+  host: **no relaunch was needed.** §2's "rows are applied at boot" is about
+  inserted rows; an id-targeted override of an existing row hot-reloads.
+
+So this machine now runs full file access *with* prompts, asking at most five times
+per session — once per write tool (`cua_click`, `cua_type`, `cua_key`,
+`cua_element`, `cua_app`) — and never for a read.
+
 Item 4 (`ctx.computerUse`) remains unexercisable here for the reason §9 gives, and
 it is the only item left open.
 
